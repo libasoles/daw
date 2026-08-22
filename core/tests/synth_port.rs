@@ -32,9 +32,14 @@ enum SynthCall {
 struct SpySynth {
     calls: Vec<SynthCall>,
     frames_rendered: usize,
+    reverb: u8,
 }
 
 impl Synth for SpySynth {
+    fn set_reverb(&mut self, reverb: u8) {
+        self.reverb = reverb;
+    }
+
     fn note_on(&mut self, instrument: InstrumentId, pitch: u8, velocity: u8, pulse: u64) {
         self.calls.push(SynthCall::NoteOn {
             instrument,
@@ -81,6 +86,15 @@ fn spy_records_note_on_with_pitch_velocity_and_pulse() {
             pulse: 480,
         }]
     );
+}
+
+#[test]
+fn spy_records_the_global_reverb_send() {
+    let mut synth = SpySynth::default();
+
+    synth.set_reverb(75);
+
+    assert_eq!(synth.reverb, 75);
 }
 
 #[test]

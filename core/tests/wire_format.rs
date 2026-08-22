@@ -27,6 +27,14 @@ fn commands_serialise_as_an_adjacently_tagged_object() {
         })
     );
     assert_eq!(
+        serde_json::to_value(Command::SetInstrument(1)).unwrap(),
+        serde_json::json!({ "type": "setInstrument", "payload": 1 })
+    );
+    assert_eq!(
+        serde_json::to_value(Command::SetReverb(75)).unwrap(),
+        serde_json::json!({ "type": "setReverb", "payload": 75 })
+    );
+    assert_eq!(
         serde_json::to_value(Command::Undo).unwrap(),
         serde_json::json!({ "type": "undo" })
     );
@@ -53,6 +61,8 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
         state: ProjectState {
             bpm: 140,
             time_signature: (4, 4),
+            instrument: 1,
+            reverb: 75,
         },
         effects: vec![Effect::NothingToUndo],
     };
@@ -60,7 +70,12 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
     assert_eq!(
         serde_json::to_value(applied).unwrap(),
         serde_json::json!({
-            "state": { "bpm": 140, "time_signature": [4, 4] },
+            "state": {
+                "bpm": 140,
+                "time_signature": [4, 4],
+                "instrument": 1,
+                "reverb": 75
+            },
             "effects": [{ "type": "nothingToUndo" }]
         })
     );

@@ -25,6 +25,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod ports;
 
+use ports::InstrumentId;
+
 /// Everything about a piece of music that gets persisted.
 ///
 /// This is exactly the structure serialised to `project.json` and
@@ -42,6 +44,13 @@ pub struct ProjectState {
     /// The time signature has no structural power: it governs the metronome's
     /// accent, the length of the count-in and a purely visual grid accent.
     pub time_signature: (u8, u8),
+    /// The instrument used globally for live playing and playback.
+    pub instrument: InstrumentId,
+    /// Global reverb send, expressed as a percentage from 0 (dry) to 100.
+    ///
+    /// This is deliberately project state but not undoable: adjusting a
+    /// continuous sound control must not displace musical actions from undo.
+    pub reverb: u8,
 }
 
 impl Default for ProjectState {
@@ -49,6 +58,8 @@ impl Default for ProjectState {
         Self {
             bpm: 120,
             time_signature: (3, 4),
+            instrument: 0,
+            reverb: 0,
         }
     }
 }
@@ -69,6 +80,12 @@ pub enum Command {
     SetBpm(u16),
     /// Sets the project's time signature (beats per bar, beat unit).
     SetTimeSignature { beats_per_bar: u8, beat_unit: u8 },
+    /// Selects the global instrument using the opaque id understood by the
+    /// synth port.
+    SetInstrument(InstrumentId),
+    /// Sets the global reverb send as a percentage from 0 (dry) to 100.
+    /// This command is intentionally excluded from undo/redo history.
+    SetReverb(u8),
     /// Reverts the most recently applied command. Not itself logged.
     Undo,
     /// Reapplies the most recently undone command. Not itself logged.
@@ -175,6 +192,19 @@ impl DawCore {
                 );
                 Vec::new()
             }
+            Command::SetInstrument(instrument) => {
+                let inverse = Command::SetInstrument(self.state.instrument);
+                self.state.instrument = instrument;
+                self.log(Command::SetInstrument(instrument), inverse);
+                Vec::new()
+            }
+            Command::SetReverb(reverb) => {
+                self.state.reverb = reverb.min(100);
+                // Reverb is a continuous performance control, not a musical
+                // edit. In particular it must neither enter nor clear either
+                // history so Cmd+Z continues to target musical actions.
+                Vec::new()
+            }
         };
 
         Applied {
@@ -238,7 +268,9 @@ impl DawCore {
                 beats_per_bar,
                 beat_unit,
             } => state.time_signature = (*beats_per_bar, *beat_unit),
-            Command::NewProject | Command::Undo | Command::Redo => {}
+            Command::SetInstrument(instrument) => state.instrument = *instrument,
+            // `SetReverb` is never logged, so undo/redo never reaches it.
+            Command::SetReverb(_) | Command::NewProject | Command::Undo | Command::Redo => {}
         }
     }
 }

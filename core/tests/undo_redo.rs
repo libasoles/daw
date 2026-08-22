@@ -26,6 +26,32 @@ fn redo_reapplies_an_undone_command() {
 }
 
 #[test]
+fn undo_reverts_an_instrument_change() {
+    let mut core = DawCore::new();
+    core.apply(Command::SetInstrument(1));
+
+    let applied = core.apply(Command::Undo);
+
+    assert_eq!(applied.state.instrument, 0);
+}
+
+#[test]
+fn reverb_changes_are_not_logged_or_undone() {
+    let mut core = DawCore::new();
+    core.apply(Command::SetReverb(75));
+    core.apply(Command::SetBpm(140));
+
+    let applied = core.apply(Command::Undo);
+
+    assert_eq!(applied.state.bpm, 120);
+    assert_eq!(applied.state.reverb, 75);
+
+    let applied = core.apply(Command::Undo);
+    assert_eq!(applied.state.reverb, 75);
+    assert_eq!(applied.effects, vec![Effect::NothingToUndo]);
+}
+
+#[test]
 fn a_sequence_of_commands_undone_and_redone_ends_in_the_expected_state() {
     let mut core = DawCore::new();
     core.apply(Command::SetBpm(140)); // 120 -> 140

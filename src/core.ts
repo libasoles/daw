@@ -12,6 +12,8 @@ import { invoke } from "@tauri-apps/api/core";
 export interface ProjectState {
   bpm: number;
   time_signature: [number, number];
+  instrument: number;
+  reverb: number;
 }
 
 export type Command =
@@ -21,6 +23,8 @@ export type Command =
       type: "setTimeSignature";
       payload: { beats_per_bar: number; beat_unit: number };
     }
+  | { type: "setInstrument"; payload: number }
+  | { type: "setReverb"; payload: number }
   | { type: "undo" }
   | { type: "redo" };
 
@@ -44,8 +48,8 @@ export function fetchProjectState(): Promise<ProjectState> {
 /**
  * Sounds a single fixed note through the bundled SoundFont, for manual
  * verification that audio reaches the speakers (issue #4). There is no MIDI
- * input (#6) or instrument choice (#5) yet, so this is a deliberately
- * temporary debug trigger, not a feature described anywhere in the spec.
+ * input (#6) yet, so this is a deliberately temporary debug trigger. It uses
+ * the current global instrument and reverb selected in project state.
  * Rejects if no audio output device is available.
  */
 export function playTestNote(): Promise<void> {

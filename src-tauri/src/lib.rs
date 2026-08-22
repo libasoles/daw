@@ -15,15 +15,12 @@ use std::thread;
 use std::time::Duration;
 
 use audio::AudioEngine;
-use daw_core::ports::InstrumentId;
 use daw_core::{Applied, Command, DawCore, ProjectState};
 use tauri::{AppHandle, Manager, State};
 
-/// The instrument and note the debug "play a note" trigger sounds. There is
-/// no instrument dropdown yet (issue #5) and no MIDI input yet (issue #6),
-/// so this ticket's only way to prove sound reaches the speakers is a fixed
-/// middle C on the bundled SoundFont's default program.
-const DEBUG_NOTE_INSTRUMENT: InstrumentId = 0;
+/// The fixed note the debug trigger sounds. There is no MIDI input yet
+/// (issue #6), so this remains the only way to prove sound reaches the
+/// speakers; it uses the current global instrument and reverb configuration.
 const DEBUG_NOTE_PITCH: u8 = 60;
 const DEBUG_NOTE_VELOCITY: u8 = 100;
 const DEBUG_NOTE_DURATION: Duration = Duration::from_millis(500);
@@ -40,9 +37,28 @@ struct AudioEngineHandle(Mutex<Option<AudioEngine>>);
 /// seam — `Command -> DawCore -> (ProjectState, Vec<Effect>)` — so adding a
 /// `Command` variant in a later ticket never means adding IPC surface here.
 #[tauri::command]
-fn apply_command(core: State<Mutex<DawCore>>, command: Command) -> Applied {
-    let mut core = core.lock().expect("DawCore mutex poisoned");
-    core.apply(command)
+fn apply_command(
+    core: State<Mutex<DawCore>>,
+    audio: State<AudioEngineHandle>,
+    command: Command,
+) -> Applied {
+    let applied = {
+        let mut core = core.lock().expect("DawCore mutex poisoned");
+        core.apply(command)
+    };
+
+    if let Some(engine) = audio
+        .0
+        .lock()
+        .expect("audio engine mutex poisoned")
+        .as_mut()
+    {
+        if let Err(err) = engine.configure(applied.state.instrument, applied.state.reverb) {
+            eprintln!("could not update audio controls: {err}");
+        }
+    }
+
+    applied
 }
 
 /// The project state as it stands right now, for the webview to render on
@@ -70,7 +86,7 @@ fn play_test_note(app: AppHandle) -> Result<(), String> {
             .as_mut()
             .ok_or_else(|| "no audio output device is available".to_string())?;
         engine
-            .note_on(DEBUG_NOTE_INSTRUMENT, DEBUG_NOTE_PITCH, DEBUG_NOTE_VELOCITY)
+            .note_on(DEBUG_NOTE_PITCH, DEBUG_NOTE_VELOCITY)
             .map_err(|err| err.to_string())?;
     }
 
@@ -81,7 +97,7 @@ fn play_test_note(app: AppHandle) -> Result<(), String> {
         if let Some(engine) = engine.as_mut() {
             // Best-effort: if the queue is full there is nothing more useful
             // to do than let the note ring out.
-            let _ = engine.note_off(DEBUG_NOTE_INSTRUMENT, DEBUG_NOTE_PITCH);
+            let _ = engine.note_off(DEBUG_NOTE_PITCH);
         }
     });
 
@@ -101,7 +117,15 @@ pub fn run() {
             // not crash the app — it is reported here and `play_test_note`
             // reports it again at call time, per the spec.
             let engine = match AudioEngine::start() {
-                Ok(engine) => Some(engine),
+                Ok(mut engine) => {
+                    // Initialise the synth thread from the same default
+                    // project state the UI receives, before any notes play.
+                    let state = ProjectState::default();
+                    if let Err(err) = engine.configure(state.instrument, state.reverb) {
+                        eprintln!("could not initialise audio controls: {err}");
+                    }
+                    Some(engine)
+                }
                 Err(err) => {
                     eprintln!("audio engine unavailable: {err}");
                     None

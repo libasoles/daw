@@ -19,4 +19,6 @@ fn a_new_core_opens_on_an_empty_project() {
 
     assert_eq!(state.bpm, 120);
     assert_eq!(state.time_signature, (3, 4));
+    assert_eq!(state.instrument, 0);
+    assert_eq!(state.reverb, 0);
 }

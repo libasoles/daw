@@ -29,6 +29,26 @@ fn applying_set_time_signature_changes_the_project_state() {
 }
 
 #[test]
+fn applying_set_instrument_changes_the_project_state() {
+    let mut core = DawCore::new();
+
+    let applied = core.apply(Command::SetInstrument(1));
+
+    assert_eq!(applied.state.instrument, 1);
+    assert_eq!(core.state().instrument, 1);
+}
+
+#[test]
+fn applying_set_reverb_changes_the_project_state() {
+    let mut core = DawCore::new();
+
+    let applied = core.apply(Command::SetReverb(75));
+
+    assert_eq!(applied.state.reverb, 75);
+    assert_eq!(core.state().reverb, 75);
+}
+
+#[test]
 fn new_project_resets_state_to_default() {
     let mut core = DawCore::new();
     core.apply(Command::SetBpm(200));
@@ -37,4 +57,6 @@ fn new_project_resets_state_to_default() {
 
     assert_eq!(applied.state.bpm, 120);
     assert_eq!(applied.state.time_signature, (3, 4));
+    assert_eq!(applied.state.instrument, 0);
+    assert_eq!(applied.state.reverb, 0);
 }

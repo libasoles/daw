@@ -9,11 +9,9 @@
  * `Cmd+Z` / `Cmd+Shift+Z` prove the same round trip is undoable. The three
  * real regions (recording area, library, timeline) follow in H1-H3.
  *
- * Issue #4 adds one more, deliberately temporary control: a "Play test note"
- * button. It bypasses `Command`/`DawCore` entirely (there is nothing about
- * sounding a fixed debug note that belongs in project state) and calls
- * `play_test_note` directly, purely so a human can confirm audio reaches the
- * speakers before MIDI input (#6) exists to trigger notes for real.
+ * The debug "Play test note" button still bypasses `Command`/`DawCore`, but
+ * the global instrument and reverb controls are commands, so it audibly uses
+ * the same project state future live and timeline trigger paths will use.
  */
 
 import { applyCommand, fetchProjectState, playTestNote, type ProjectState } from "./core";
@@ -30,6 +28,10 @@ const mark = /* html */ `
 const BPM_MIN = 20;
 const BPM_MAX = 300;
 const BPM_STEP = 1;
+const REVERB_MIN = 0;
+const REVERB_MAX = 100;
+const PIANO = 0;
+const ACCORDION = 1;
 
 function render(root: HTMLElement, state: ProjectState): void {
   root.innerHTML = /* html */ `
@@ -56,6 +58,27 @@ function render(root: HTMLElement, state: ProjectState): void {
         </label>
         <button class="tempo__step" type="button" data-tempo-step="1" aria-label="Increase tempo">+</button>
       </div>
+      <div class="sound-controls" aria-label="Global sound controls">
+        <label class="sound-control">
+          <span class="sound-control__label">Instrument</span>
+          <select class="sound-control__select" data-instrument aria-label="Global instrument">
+            <option value="${PIANO}"${state.instrument === PIANO ? " selected" : ""}>Piano</option>
+            <option value="${ACCORDION}"${state.instrument === ACCORDION ? " selected" : ""}>Accordion</option>
+          </select>
+        </label>
+        <label class="sound-control sound-control--reverb">
+          <span class="sound-control__label">Reverb <output data-reverb-value>${state.reverb}%</output></span>
+          <input
+            class="sound-control__range"
+            data-reverb
+            type="range"
+            min="${REVERB_MIN}"
+            max="${REVERB_MAX}"
+            value="${state.reverb}"
+            aria-label="Global reverb"
+          />
+        </label>
+      </div>
       <button class="test-note" type="button" data-play-test-note>
         Play test note
       </button>
@@ -71,6 +94,25 @@ function clampBpm(bpm: number): number {
 async function setBpm(root: HTMLElement, bpm: number): Promise<void> {
   const applied = await applyCommand({ type: "setBpm", payload: clampBpm(bpm) });
   render(root, applied.state);
+}
+
+async function setInstrument(root: HTMLElement, instrument: number): Promise<void> {
+  const applied = await applyCommand({ type: "setInstrument", payload: instrument });
+  render(root, applied.state);
+}
+
+async function setReverb(root: HTMLElement, reverb: number): Promise<void> {
+  const value = Math.min(REVERB_MAX, Math.max(REVERB_MIN, Math.round(reverb)));
+  // Deliberately does not call `render`: a full re-render replaces the
+  // `<input type="range">` element, which would sever the browser's native
+  // drag gesture on every `input` event and make the knob unusable while
+  // dragging. The readout is updated directly instead; the slider's own
+  // value is already authoritative from the user's gesture.
+  const output = root.querySelector<HTMLOutputElement>("[data-reverb-value]");
+  if (output) {
+    output.textContent = `${value}%`;
+  }
+  await applyCommand({ type: "setReverb", payload: value });
 }
 
 async function undo(root: HTMLElement): Promise<void> {
@@ -99,6 +141,22 @@ function wireTempoControls(root: HTMLElement): void {
     const input = event.target as HTMLElement;
     if (!input.matches(".tempo__input")) return;
     void setBpm(root, Number((input as HTMLInputElement).value));
+  });
+}
+
+function wireSoundControls(root: HTMLElement): void {
+  root.addEventListener("change", (event) => {
+    const input = event.target as HTMLElement;
+    if (input.matches("[data-instrument]")) {
+      void setInstrument(root, Number((input as HTMLSelectElement).value));
+    }
+  });
+
+  root.addEventListener("input", (event) => {
+    const input = event.target as HTMLElement;
+    if (input.matches("[data-reverb]")) {
+      void setReverb(root, Number((input as HTMLInputElement).value));
+    }
   });
 }
 
@@ -143,6 +201,7 @@ async function main(): Promise<void> {
   const state = await fetchProjectState();
   render(root, state);
   wireTempoControls(root);
+  wireSoundControls(root);
   wireTestNoteButton(root);
   wireUndoRedoKeys(root);
 }

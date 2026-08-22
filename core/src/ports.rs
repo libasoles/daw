@@ -11,9 +11,9 @@
 /// addable later "without restructuring the audio engine" — an enum baked
 /// into this trait would fail that the moment a second instrument arrived.
 /// An opaque id makes adding one a data change (a new id, a new SoundFont
-/// preset mapping) rather than a trait change. The instrument dropdown that
-/// assigns meaning to ids is issue #5; today the shell maps every id to the
-/// bundled SoundFont's default (piano) preset.
+/// preset mapping) rather than a trait change. The shell maps the initial
+/// piano and accordion ids to bundled SoundFont presets; future ids extend
+/// that mapping.
 pub type InstrumentId = u32;
 
 /// The adapter boundary that keeps the sound engine replaceable. Swapping
@@ -38,6 +38,10 @@ pub type InstrumentId = u32;
 /// threading requirement beyond `Send`, since ownership (not `Sync`) is what
 /// crossing to a dedicated synth thread requires.
 pub trait Synth: Send {
+    /// Sets the global reverb send as a percentage from 0 (dry) to 100.
+    /// Like note requests, this is called off the hard real-time callback.
+    fn set_reverb(&mut self, reverb: u8);
+
     /// Starts sounding `pitch` (a MIDI note number) on `instrument` at
     /// `velocity`, timestamped at `pulse` for tests/scheduling purposes.
     fn note_on(&mut self, instrument: InstrumentId, pitch: u8, velocity: u8, pulse: u64);

@@ -18,13 +18,15 @@ use super::synth::{RustySynth, RustySynthError};
 /// tickets extend this enum (e.g. with a schedule snapshot) rather than the
 /// thread split or the queues that carry it.
 pub enum EngineCommand {
-    NoteOn {
+    Configure {
         instrument: InstrumentId,
+        reverb: u8,
+    },
+    NoteOn {
         pitch: u8,
         velocity: u8,
     },
     NoteOff {
-        instrument: InstrumentId,
         pitch: u8,
     },
 }
@@ -159,33 +161,34 @@ impl AudioEngine {
         })
     }
 
-    /// Requests that `pitch` start sounding on `instrument`. Non-blocking:
+    /// Requests that `pitch` start sounding with the current global
+    /// instrument. Non-blocking:
     /// if the synth thread has fallen behind and the command queue is full,
     /// this drops the request and reports it rather than blocking the
     /// caller (an IPC thread).
-    pub fn note_on(
-        &mut self,
-        instrument: InstrumentId,
-        pitch: u8,
-        velocity: u8,
-    ) -> Result<(), EngineCommandDropped> {
+    pub fn note_on(&mut self, pitch: u8, velocity: u8) -> Result<(), EngineCommandDropped> {
         self.commands
-            .push(EngineCommand::NoteOn {
-                instrument,
-                pitch,
-                velocity,
-            })
+            .push(EngineCommand::NoteOn { pitch, velocity })
             .map_err(|_| EngineCommandDropped)
     }
 
-    /// Requests that `pitch` stop sounding on `instrument`. See [`Self::note_on`].
-    pub fn note_off(
+    /// Requests that `pitch` stop sounding. See [`Self::note_on`].
+    pub fn note_off(&mut self, pitch: u8) -> Result<(), EngineCommandDropped> {
+        self.commands
+            .push(EngineCommand::NoteOff { pitch })
+            .map_err(|_| EngineCommandDropped)
+    }
+
+    /// Updates the global sound controls on the synth thread. Keeping these
+    /// commands alongside note events means every current and future trigger
+    /// path receives the same selected instrument and reverb automatically.
+    pub fn configure(
         &mut self,
         instrument: InstrumentId,
-        pitch: u8,
+        reverb: u8,
     ) -> Result<(), EngineCommandDropped> {
         self.commands
-            .push(EngineCommand::NoteOff { instrument, pitch })
+            .push(EngineCommand::Configure { instrument, reverb })
             .map_err(|_| EngineCommandDropped)
     }
 }
@@ -213,19 +216,23 @@ fn spawn_synth_thread(
     mut samples: rtrb::Producer<f32>,
 ) {
     thread::spawn(move || {
+        let mut instrument = 0;
         let mut left = [0f32; RENDER_CHUNK_FRAMES];
         let mut right = [0f32; RENDER_CHUNK_FRAMES];
         loop {
             while let Ok(command) = commands.pop() {
                 match command {
-                    EngineCommand::NoteOn {
-                        instrument,
-                        pitch,
-                        velocity,
-                    } => synth.note_on(instrument, pitch, velocity, 0),
-                    EngineCommand::NoteOff { instrument, pitch } => {
-                        synth.note_off(instrument, pitch, 0)
+                    EngineCommand::Configure {
+                        instrument: next_instrument,
+                        reverb,
+                    } => {
+                        instrument = next_instrument;
+                        synth.set_reverb(reverb);
                     }
+                    EngineCommand::NoteOn { pitch, velocity } => {
+                        synth.note_on(instrument, pitch, velocity, 0)
+                    }
+                    EngineCommand::NoteOff { pitch } => synth.note_off(instrument, pitch, 0),
                 }
             }
 

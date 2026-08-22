@@ -27,6 +27,14 @@ use rustysynth::{SoundFont, SoundFontError, Synthesizer, SynthesizerError, Synth
 /// constraint in the spec.
 const SOUND_FONT_BYTES: &[u8] = include_bytes!("../../assets/soundfonts/TimGM6mb.sf2");
 
+/// The two instruments exposed by the initial global selector. These remain
+/// opaque at the `Synth` port; adding another one is a mapping/data change
+/// here, not a trait or engine redesign. GM program numbers are zero-based.
+const PIANO_PROGRAM: i32 = 0;
+const ACCORDION_PROGRAM: i32 = 21;
+const GM_CHANNEL: i32 = 0;
+const MIDI_REVERB_CONTROLLER: i32 = 0x5B;
+
 /// Everything that can go wrong constructing a [`RustySynth`]: either the
 /// bundled bytes don't parse as a SoundFont, or `rustysynth` rejects the
 /// settings derived from them.
@@ -79,15 +87,34 @@ impl RustySynth {
 }
 
 impl Synth for RustySynth {
-    fn note_on(&mut self, _instrument: InstrumentId, pitch: u8, velocity: u8, _pulse: u64) {
+    fn set_reverb(&mut self, reverb: u8) {
+        // rustysynth exposes General MIDI control changes directly. CC 91 is
+        // reverb send, with the MIDI range 0..=127; project state uses the
+        // musician-facing 0..=100 percent range.
+        let midi_reverb = i32::from(reverb.min(100)) * 127 / 100;
+        self.inner
+            .process_midi_message(GM_CHANNEL, 0xB0, MIDI_REVERB_CONTROLLER, midi_reverb);
+    }
+
+    fn note_on(&mut self, instrument: InstrumentId, pitch: u8, velocity: u8, _pulse: u64) {
         // There is no timeline yet to make `pulse` meaningful; it is
         // received and ignored here so the port's shape doesn't have to
         // change once one exists.
-        self.inner.note_on(0, pitch as i32, velocity as i32);
+        self.inner.process_midi_message(
+            GM_CHANNEL,
+            0xC0,
+            match instrument {
+                1 => ACCORDION_PROGRAM,
+                _ => PIANO_PROGRAM,
+            },
+            0,
+        );
+        self.inner
+            .note_on(GM_CHANNEL, pitch as i32, velocity as i32);
     }
 
     fn note_off(&mut self, _instrument: InstrumentId, pitch: u8, _pulse: u64) {
-        self.inner.note_off(0, pitch as i32);
+        self.inner.note_off(GM_CHANNEL, pitch as i32);
     }
 
     fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
