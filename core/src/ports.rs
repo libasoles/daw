@@ -6,6 +6,7 @@
 //! a keyboard or an operating system MIDI service.
 
 use std::fmt;
+use std::collections::BTreeMap;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -18,6 +19,35 @@ use std::time::{Duration, Instant};
 /// piano and accordion ids to bundled SoundFont presets; future ids extend
 /// that mapping.
 pub type InstrumentId = u32;
+
+/// Project-document storage, kept behind a port so the musical core never
+/// knows filesystem paths or native dialogs (issue #13).
+pub trait Storage: Send {
+    fn save(&mut self, name: &str, document: String) -> Result<(), String>;
+    fn load(&self, name: &str) -> Result<Option<String>, String>;
+    fn list(&self) -> Result<Vec<String>, String>;
+}
+
+/// In-memory storage adapter for deterministic project round-trip tests.
+#[derive(Default)]
+pub struct MemoryStorage {
+    documents: BTreeMap<String, String>,
+}
+
+impl Storage for MemoryStorage {
+    fn save(&mut self, name: &str, document: String) -> Result<(), String> {
+        self.documents.insert(name.into(), document);
+        Ok(())
+    }
+
+    fn load(&self, name: &str) -> Result<Option<String>, String> {
+        Ok(self.documents.get(name).cloned())
+    }
+
+    fn list(&self) -> Result<Vec<String>, String> {
+        Ok(self.documents.keys().cloned().collect())
+    }
+}
 
 /// A MIDI input exposed to a musician. `id` is an opaque, shell-provided
 /// identifier suitable for saving as an application preference; `name` is
