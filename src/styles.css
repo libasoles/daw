@@ -177,6 +177,42 @@ body {
   text-transform: lowercase;
 }
 
+/* --- Pulse controls (issue #7): audible time without a timeline. ------- */
+
+.pulse-controls {
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+.time-signature {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-numeric);
+}
+
+.time-signature .sound-control__select {
+  min-width: 0;
+  width: 4rem;
+}
+
+.pulse-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--ink-dim);
+  font-size: var(--text-xs);
+  text-transform: lowercase;
+}
+
+.pulse-toggle input {
+  width: 1.125rem;
+  height: 1.125rem;
+  accent-color: var(--accent);
+}
+
 /* --- Global sound controls (issue #5). ---------------------------------- */
 
 .sound-controls {

@@ -7,7 +7,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use daw_core::ports::{InstrumentId, Synth};
+use daw_core::{
+    is_bar_accent,
+    ports::{InstrumentId, Synth},
+};
 use rtrb::RingBuffer;
 
 use super::synth::{RustySynth, RustySynthError};
@@ -21,6 +24,9 @@ pub enum EngineCommand {
     Configure {
         instrument: InstrumentId,
         reverb: u8,
+        bpm: u16,
+        time_signature: (u8, u8),
+        metronome_enabled: bool,
     },
     NoteOn {
         pitch: u8,
@@ -114,7 +120,7 @@ impl AudioEngine {
             RustySynth::with_bundled_sound_font(sample_rate).map_err(AudioEngineError::Synth)?;
 
         let (audio_producer, mut audio_consumer) = RingBuffer::<f32>::new(AUDIO_QUEUE_CAPACITY);
-        spawn_synth_thread(synth, command_consumer, audio_producer);
+        spawn_synth_thread(synth, sample_rate as u32, command_consumer, audio_producer);
 
         let stream = device
             .build_output_stream(
@@ -209,9 +215,18 @@ impl AudioEngine {
         &mut self,
         instrument: InstrumentId,
         reverb: u8,
+        bpm: u16,
+        time_signature: (u8, u8),
+        metronome_enabled: bool,
     ) -> Result<(), EngineCommandDropped> {
         self.commands
-            .push(EngineCommand::Configure { instrument, reverb })
+            .push(EngineCommand::Configure {
+                instrument,
+                reverb,
+                bpm,
+                time_signature,
+                metronome_enabled,
+            })
             .map_err(|_| EngineCommandDropped)
     }
 }
@@ -235,11 +250,19 @@ impl std::error::Error for EngineCommandDropped {}
 /// callback to consume.
 fn spawn_synth_thread(
     mut synth: RustySynth,
+    sample_rate: u32,
     mut commands: rtrb::Consumer<EngineCommand>,
     mut samples: rtrb::Producer<f32>,
 ) {
     thread::spawn(move || {
         let mut instrument = 0;
+        let mut bpm = 120;
+        let mut time_signature = (3, 4);
+        let mut metronome_enabled = false;
+        let mut last_metronome_pulse = None;
+        let mut rendered_frames = 0u64;
+        let mut click_frames_remaining = 0usize;
+        let mut click_amplitude = 0.0;
         let mut left = [0f32; RENDER_CHUNK_FRAMES];
         let mut right = [0f32; RENDER_CHUNK_FRAMES];
         loop {
@@ -248,9 +271,19 @@ fn spawn_synth_thread(
                     EngineCommand::Configure {
                         instrument: next_instrument,
                         reverb,
+                        bpm: next_bpm,
+                        time_signature: next_time_signature,
+                        metronome_enabled: next_metronome_enabled,
                     } => {
                         instrument = next_instrument;
                         synth.set_reverb(reverb);
+                        if metronome_enabled && !next_metronome_enabled {
+                            last_metronome_pulse = None;
+                            click_frames_remaining = 0;
+                        }
+                        metronome_enabled = next_metronome_enabled;
+                        bpm = next_bpm;
+                        time_signature = next_time_signature;
                     }
                     EngineCommand::NoteOn {
                         pitch,
@@ -271,16 +304,49 @@ fn spawn_synth_thread(
 
             synth.render(&mut left, &mut right);
 
-            for (&l, &r) in left.iter().zip(right.iter()) {
+            for (l, r) in left.iter_mut().zip(right.iter_mut()) {
+                if metronome_enabled && bpm != 0 {
+                    // This is the inverse of `daw_core::pulse_elapsed_time`:
+                    // elapsed rendered frames determine the current pulse.
+                    // It runs here, never in the real-time callback.
+                    let pulse = rendered_frames.saturating_mul(u64::from(bpm))
+                        / (u64::from(sample_rate) * 60);
+                    if last_metronome_pulse != Some(pulse) {
+                        last_metronome_pulse = Some(pulse);
+                        click_frames_remaining =
+                            usize::try_from(sample_rate / 125).unwrap_or(1).max(1);
+                        click_amplitude = if is_bar_accent(pulse, time_signature) {
+                            0.35
+                        } else {
+                            0.2
+                        };
+                    }
+                }
+
+                if click_frames_remaining != 0 {
+                    // A short alternating, decaying impulse is enough to be
+                    // audible as a click without another audio dependency.
+                    let click = if click_frames_remaining.is_multiple_of(2) {
+                        click_amplitude
+                    } else {
+                        -click_amplitude
+                    } * (click_frames_remaining as f32
+                        / (sample_rate / 125).max(1) as f32);
+                    *l += click;
+                    *r += click;
+                    click_frames_remaining -= 1;
+                }
+
                 // This thread is not real-time: briefly waiting rather than
                 // dropping samples when the queue is full cannot stall the
                 // audio callback, which only ever reads.
-                while samples.push(l).is_err() {
+                while samples.push(*l).is_err() {
                     thread::sleep(Duration::from_micros(200));
                 }
-                while samples.push(r).is_err() {
+                while samples.push(*r).is_err() {
                     thread::sleep(Duration::from_micros(200));
                 }
+                rendered_frames = rendered_frames.saturating_add(1);
             }
         }
     });

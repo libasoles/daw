@@ -52,6 +52,24 @@ fn reverb_changes_are_not_logged_or_undone() {
 }
 
 #[test]
+fn pulse_control_changes_are_not_logged_or_undone() {
+    let mut core = DawCore::new();
+    core.apply(Command::SetMetronomeEnabled(true));
+    core.apply(Command::SetCountInEnabled(false));
+    core.apply(Command::SetBpm(140));
+
+    let applied = core.apply(Command::Undo);
+
+    assert_eq!(applied.state.bpm, 120);
+    assert!(applied.state.metronome_enabled);
+    assert!(!applied.state.count_in_enabled);
+    assert_eq!(
+        core.apply(Command::Undo).effects,
+        vec![Effect::NothingToUndo]
+    );
+}
+
+#[test]
 fn a_sequence_of_commands_undone_and_redone_ends_in_the_expected_state() {
     let mut core = DawCore::new();
     core.apply(Command::SetBpm(140)); // 120 -> 140

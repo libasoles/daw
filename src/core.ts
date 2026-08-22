@@ -14,6 +14,8 @@ export interface ProjectState {
   time_signature: [number, number];
   instrument: number;
   reverb: number;
+  metronome_enabled: boolean;
+  count_in_enabled: boolean;
 }
 
 export type Command =
@@ -25,6 +27,8 @@ export type Command =
     }
   | { type: "setInstrument"; payload: number }
   | { type: "setReverb"; payload: number }
+  | { type: "setMetronomeEnabled"; payload: boolean }
+  | { type: "setCountInEnabled"; payload: boolean }
   | { type: "undo" }
   | { type: "redo" };
 

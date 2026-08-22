@@ -74,7 +74,13 @@ fn apply_command(
         .expect("audio engine mutex poisoned")
         .as_mut()
     {
-        if let Err(err) = engine.configure(applied.state.instrument, applied.state.reverb) {
+        if let Err(err) = engine.configure(
+            applied.state.instrument,
+            applied.state.reverb,
+            applied.state.bpm,
+            applied.state.time_signature,
+            applied.state.metronome_enabled,
+        ) {
             eprintln!("could not update audio controls: {err}");
         }
     }
@@ -142,7 +148,13 @@ pub fn run() {
                     // Initialise the synth thread from the same default
                     // project state the UI receives, before any notes play.
                     let state = ProjectState::default();
-                    if let Err(err) = engine.configure(state.instrument, state.reverb) {
+                    if let Err(err) = engine.configure(
+                        state.instrument,
+                        state.reverb,
+                        state.bpm,
+                        state.time_signature,
+                        state.metronome_enabled,
+                    ) {
                         eprintln!("could not initialise audio controls: {err}");
                     }
                     Some(engine)

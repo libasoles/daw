@@ -21,4 +21,6 @@ fn a_new_core_opens_on_an_empty_project() {
     assert_eq!(state.time_signature, (3, 4));
     assert_eq!(state.instrument, 0);
     assert_eq!(state.reverb, 0);
+    assert!(!state.metronome_enabled);
+    assert!(state.count_in_enabled);
 }

@@ -20,6 +20,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +52,16 @@ pub struct ProjectState {
     /// This is deliberately project state but not undoable: adjusting a
     /// continuous sound control must not displace musical actions from undo.
     pub reverb: u8,
+    /// Whether the audible pulse is sounding.
+    ///
+    /// Like reverb, this is a performance preference stored with the project
+    /// rather than a musical edit in its undo history.
+    pub metronome_enabled: bool,
+    /// Whether recording begins with one count-in bar.
+    ///
+    /// This has no structural effect on notes; it only decides whether a
+    /// future recording action waits for [`count_in_length_in_pulses`].
+    pub count_in_enabled: bool,
 }
 
 impl Default for ProjectState {
@@ -60,6 +71,8 @@ impl Default for ProjectState {
             time_signature: (3, 4),
             instrument: 0,
             reverb: 0,
+            metronome_enabled: false,
+            count_in_enabled: true,
         }
     }
 }
@@ -86,6 +99,12 @@ pub enum Command {
     /// Sets the global reverb send as a percentage from 0 (dry) to 100.
     /// This command is intentionally excluded from undo/redo history.
     SetReverb(u8),
+    /// Switches the audible pulse on or off. This is intentionally excluded
+    /// from undo/redo history, like [`Command::SetReverb`].
+    SetMetronomeEnabled(bool),
+    /// Switches the one-bar count-in on or off. This is intentionally excluded
+    /// from undo/redo history, like [`Command::SetReverb`].
+    SetCountInEnabled(bool),
     /// Reverts the most recently applied command. Not itself logged.
     Undo,
     /// Reapplies the most recently undone command. Not itself logged.
@@ -208,6 +227,18 @@ impl DawCore {
                 // history so Cmd+Z continues to target musical actions.
                 Vec::new()
             }
+            Command::SetMetronomeEnabled(enabled) => {
+                self.state.metronome_enabled = enabled;
+                // The metronome is an immediate performance control, not a
+                // musical edit, so it must leave undo/redo aimed at music.
+                Vec::new()
+            }
+            Command::SetCountInEnabled(enabled) => {
+                self.state.count_in_enabled = enabled;
+                // Count-in changes how a future recording starts; it does
+                // not change any recorded material or the undo history.
+                Vec::new()
+            }
         };
 
         Applied {
@@ -282,8 +313,38 @@ impl DawCore {
                 beat_unit,
             } => state.time_signature = (*beats_per_bar, *beat_unit),
             Command::SetInstrument(instrument) => state.instrument = *instrument,
-            // `SetReverb` is never logged, so undo/redo never reaches it.
-            Command::SetReverb(_) | Command::NewProject | Command::Undo | Command::Redo => {}
+            // These controls are never logged, so undo/redo never reaches
+            // them. The remaining variants cannot occur in the log either.
+            Command::SetReverb(_)
+            | Command::SetMetronomeEnabled(_)
+            | Command::SetCountInEnabled(_)
+            | Command::NewProject
+            | Command::Undo
+            | Command::Redo => {}
         }
     }
+}
+
+/// Maps a pulse offset to wall-clock time at `bpm`.
+///
+/// Notes remain stored at their pulse offsets, so callers can use this only
+/// when rendering playback. A zero BPM has no meaningful wall-clock mapping.
+pub fn pulse_elapsed_time(pulse: u64, bpm: u16) -> Option<Duration> {
+    (bpm != 0).then(|| Duration::from_secs_f64(pulse as f64 * 60.0 / f64::from(bpm)))
+}
+
+/// Whether `pulse` is the first pulse of its bar and should receive the
+/// metronome accent. The beat unit deliberately has no role: pulses are the
+/// application's unit of time, while the time signature has no structural
+/// power.
+pub fn is_bar_accent(pulse: u64, time_signature: (u8, u8)) -> bool {
+    let beats_per_bar = u64::from(time_signature.0);
+    beats_per_bar != 0 && pulse.is_multiple_of(beats_per_bar)
+}
+
+/// The number of pulses in the one-bar count-in governed by `time_signature`.
+/// The beat unit deliberately has no role for the same reason as in
+/// [`is_bar_accent`].
+pub fn count_in_length_in_pulses(time_signature: (u8, u8)) -> u64 {
+    u64::from(time_signature.0)
 }

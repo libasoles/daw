@@ -35,6 +35,14 @@ fn commands_serialise_as_an_adjacently_tagged_object() {
         serde_json::json!({ "type": "setReverb", "payload": 75 })
     );
     assert_eq!(
+        serde_json::to_value(Command::SetMetronomeEnabled(true)).unwrap(),
+        serde_json::json!({ "type": "setMetronomeEnabled", "payload": true })
+    );
+    assert_eq!(
+        serde_json::to_value(Command::SetCountInEnabled(false)).unwrap(),
+        serde_json::json!({ "type": "setCountInEnabled", "payload": false })
+    );
+    assert_eq!(
         serde_json::to_value(Command::Undo).unwrap(),
         serde_json::json!({ "type": "undo" })
     );
@@ -63,6 +71,8 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
             time_signature: (4, 4),
             instrument: 1,
             reverb: 75,
+            metronome_enabled: true,
+            count_in_enabled: false,
         },
         effects: vec![Effect::NoMidiDeviceAvailable],
     };
@@ -74,7 +84,9 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
                 "bpm": 140,
                 "time_signature": [4, 4],
                 "instrument": 1,
-                "reverb": 75
+                "reverb": 75,
+                "metronome_enabled": true,
+                "count_in_enabled": false
             },
             "effects": [{ "type": "noMidiDeviceAvailable" }]
         })

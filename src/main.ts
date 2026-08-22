@@ -66,6 +66,36 @@ function render(root: HTMLElement, state: ProjectState): void {
         </label>
         <button class="tempo__step" type="button" data-tempo-step="1" aria-label="Increase tempo">+</button>
       </div>
+      <div class="pulse-controls" aria-label="Pulse controls">
+        <label class="sound-control">
+          <span class="sound-control__label">Time signature</span>
+          <span class="time-signature">
+            <select class="sound-control__select" data-beats-per-bar aria-label="Beats per bar">
+              <option value="2"${state.time_signature[0] === 2 ? " selected" : ""}>2</option>
+              <option value="3"${state.time_signature[0] === 3 ? " selected" : ""}>3</option>
+              <option value="4"${state.time_signature[0] === 4 ? " selected" : ""}>4</option>
+              <option value="5"${state.time_signature[0] === 5 ? " selected" : ""}>5</option>
+              <option value="6"${state.time_signature[0] === 6 ? " selected" : ""}>6</option>
+              <option value="7"${state.time_signature[0] === 7 ? " selected" : ""}>7</option>
+            </select>
+            <span aria-hidden="true">/</span>
+            <select class="sound-control__select" data-beat-unit aria-label="Beat unit">
+              <option value="2"${state.time_signature[1] === 2 ? " selected" : ""}>2</option>
+              <option value="4"${state.time_signature[1] === 4 ? " selected" : ""}>4</option>
+              <option value="8"${state.time_signature[1] === 8 ? " selected" : ""}>8</option>
+              <option value="16"${state.time_signature[1] === 16 ? " selected" : ""}>16</option>
+            </select>
+          </span>
+        </label>
+        <label class="pulse-toggle">
+          <input type="checkbox" data-metronome${state.metronome_enabled ? " checked" : ""} />
+          <span>Metronome</span>
+        </label>
+        <label class="pulse-toggle">
+          <input type="checkbox" data-count-in${state.count_in_enabled ? " checked" : ""} />
+          <span>One-bar count-in</span>
+        </label>
+      </div>
       <div class="sound-controls" aria-label="Global sound controls">
         <label class="sound-control">
           <span class="sound-control__label">Instrument</span>
@@ -118,6 +148,28 @@ async function setInstrument(root: HTMLElement, instrument: number): Promise<voi
   render(root, applied.state);
 }
 
+async function setTimeSignature(
+  root: HTMLElement,
+  beatsPerBar: number,
+  beatUnit: number,
+): Promise<void> {
+  const applied = await applyCommand({
+    type: "setTimeSignature",
+    payload: { beats_per_bar: beatsPerBar, beat_unit: beatUnit },
+  });
+  render(root, applied.state);
+}
+
+async function setMetronomeEnabled(root: HTMLElement, enabled: boolean): Promise<void> {
+  const applied = await applyCommand({ type: "setMetronomeEnabled", payload: enabled });
+  render(root, applied.state);
+}
+
+async function setCountInEnabled(root: HTMLElement, enabled: boolean): Promise<void> {
+  const applied = await applyCommand({ type: "setCountInEnabled", payload: enabled });
+  render(root, applied.state);
+}
+
 async function setReverb(root: HTMLElement, reverb: number): Promise<void> {
   const value = Math.min(REVERB_MAX, Math.max(REVERB_MIN, Math.round(reverb)));
   // Deliberately does not call `render`: a full re-render replaces the
@@ -166,6 +218,19 @@ function wireSoundControls(root: HTMLElement): void {
     const input = event.target as HTMLElement;
     if (input.matches("[data-instrument]")) {
       void setInstrument(root, Number((input as HTMLSelectElement).value));
+    }
+    if (input.matches("[data-beats-per-bar], [data-beat-unit]")) {
+      const beatsPerBar = root.querySelector<HTMLSelectElement>("[data-beats-per-bar]");
+      const beatUnit = root.querySelector<HTMLSelectElement>("[data-beat-unit]");
+      if (beatsPerBar && beatUnit) {
+        void setTimeSignature(root, Number(beatsPerBar.value), Number(beatUnit.value));
+      }
+    }
+    if (input.matches("[data-metronome]")) {
+      void setMetronomeEnabled(root, (input as HTMLInputElement).checked);
+    }
+    if (input.matches("[data-count-in]")) {
+      void setCountInEnabled(root, (input as HTMLInputElement).checked);
     }
   });
 

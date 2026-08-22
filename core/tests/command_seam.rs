@@ -49,6 +49,17 @@ fn applying_set_reverb_changes_the_project_state() {
 }
 
 #[test]
+fn applying_pulse_controls_changes_the_project_state() {
+    let mut core = DawCore::new();
+
+    core.apply(Command::SetMetronomeEnabled(true));
+    let applied = core.apply(Command::SetCountInEnabled(false));
+
+    assert!(applied.state.metronome_enabled);
+    assert!(!applied.state.count_in_enabled);
+}
+
+#[test]
 fn new_project_resets_state_to_default() {
     let mut core = DawCore::new();
     core.apply(Command::SetBpm(200));
@@ -59,4 +70,6 @@ fn new_project_resets_state_to_default() {
     assert_eq!(applied.state.time_signature, (3, 4));
     assert_eq!(applied.state.instrument, 0);
     assert_eq!(applied.state.reverb, 0);
+    assert!(!applied.state.metronome_enabled);
+    assert!(applied.state.count_in_enabled);
 }
