@@ -83,6 +83,10 @@ fn commands_serialise_as_an_adjacently_tagged_object() {
         serde_json::json!({ "type": "playTake" })
     );
     assert_eq!(
+        serde_json::to_value(Command::PlayTimeline).unwrap(),
+        serde_json::json!({ "type": "playTimeline" })
+    );
+    assert_eq!(
         serde_json::to_value(Command::PlaybackFinished).unwrap(),
         serde_json::json!({ "type": "playbackFinished" })
     );

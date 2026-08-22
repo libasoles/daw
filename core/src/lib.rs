@@ -410,6 +410,14 @@ pub enum Command {
     },
     InsertPlacement(Placement),
     RemovePlacement(Placement),
+    /// Plays the whole arrangement from the beginning (issue #18): every
+    /// track's placements, flattened into one immutable note stream in a
+    /// single [`Effect::PlaySchedule`], exactly like `PlayTake`/`PlayBlock`
+    /// already hand the shell a schedule to turn into real audio. Not
+    /// undoable. Mutually exclusive with take/block playback through the
+    /// same `is_playing` flag — refused (no effect) while anything is
+    /// already playing, and a no-op if the timeline holds nothing yet.
+    PlayTimeline,
     RenameBlock {
         id: u64,
         name: String,
@@ -744,6 +752,27 @@ impl DawCore {
                 }
                 None => Vec::new(),
             },
+            Command::PlayTimeline => {
+                if self.state.is_playing || self.state.placements.is_empty() {
+                    Vec::new()
+                } else {
+                    self.state.is_playing = true;
+                    let notes = self
+                        .state
+                        .placements
+                        .iter()
+                        .flat_map(|placement| {
+                            placement.notes.iter().map(move |note| RecordedNote {
+                                pitch: note.pitch,
+                                velocity: note.velocity,
+                                start_pulse: placement.start_pulse + note.start_pulse,
+                                end_pulse: placement.start_pulse + note.end_pulse,
+                            })
+                        })
+                        .collect();
+                    vec![Effect::PlaySchedule(Take::from_raw_notes(notes))]
+                }
+            }
             Command::PlaybackFinished => {
                 self.state.is_playing = false;
                 Vec::new()
@@ -907,6 +936,7 @@ impl DawCore {
             | Command::PlayTake
             | Command::PlayBlock(_)
             | Command::AddPlacement { .. }
+            | Command::PlayTimeline
             | Command::PlaybackFinished
             | Command::NewProject { .. }
             | Command::OpenProject { .. }

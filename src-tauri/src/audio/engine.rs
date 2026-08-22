@@ -43,6 +43,12 @@ pub enum EngineCommand {
     /// thread's job — see its per-sample loop, which already derives "what
     /// pulse is this frame" for the metronome and reuses that math here.
     PlaySchedule(Vec<ScheduledEvent>),
+    /// Stops whatever schedule is currently playing (issue #18's "`Space`
+    /// stops playback"): silences every note the schedule turned on but
+    /// hadn't yet turned off — the same cleanup a fresh `PlaySchedule`
+    /// already does before starting its own — and drops the remaining
+    /// events so nothing further from it fires.
+    StopSchedule,
 }
 
 /// One note on/off to fire at a given pulse, relative to whenever the
@@ -245,6 +251,14 @@ impl AudioEngine {
             .map_err(|_| EngineCommandDropped)
     }
 
+    /// Requests that the synth thread stop whatever schedule is currently
+    /// playing (issue #18). Non-blocking; see [`Self::note_on`].
+    pub fn stop_schedule(&mut self) -> Result<(), EngineCommandDropped> {
+        self.commands
+            .push(EngineCommand::StopSchedule)
+            .map_err(|_| EngineCommandDropped)
+    }
+
     /// Updates the global sound controls on the synth thread. Keeping these
     /// commands alongside note events means every current and future trigger
     /// path receives the same selected instrument and reverb automatically.
@@ -351,6 +365,12 @@ fn spawn_synth_thread(
                             started_at_frame: rendered_frames,
                             next_index: 0,
                         });
+                    }
+                    EngineCommand::StopSchedule => {
+                        for pitch in held_from_schedule.drain(..) {
+                            synth.note_off(instrument, pitch, 0);
+                        }
+                        schedule = None;
                     }
                 }
             }

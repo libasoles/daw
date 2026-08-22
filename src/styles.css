@@ -455,6 +455,25 @@ body {
   color: var(--ink-dim);
 }
 
+.timeline__play {
+  font: inherit;
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+.timeline__play:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.timeline__play:disabled {
+  color: var(--ink-faint);
+}
+
 .timeline__zoom {
   display: flex;
   gap: var(--space-1);
@@ -518,6 +537,31 @@ body {
   color: var(--ink);
   font-size: var(--text-xs);
   pointer-events: auto;
+}
+
+/* --- Timeline playhead (issue #18): follows playback position from the
+   start of the arrangement to its end, over the same span the core's own
+   completion timer uses, so it finishes exactly as playback does. -------- */
+
+@keyframes timeline-playhead-move {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(var(--playhead-distance));
+  }
+}
+
+.timeline-playhead {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2px;
+  height: 120px;
+  background: var(--accent);
+  animation-name: timeline-playhead-move;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
 }
 
 /* --- The app's one modal dialog (issue #14): warns before discarding

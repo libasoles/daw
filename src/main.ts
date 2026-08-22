@@ -26,6 +26,7 @@ import {
   resolveRecovery,
   saveProject,
   selectMidiDevice,
+  stopPlayback,
   stopRecording,
   type MidiStatus,
   type ProjectState,
@@ -97,6 +98,11 @@ let pendingActionAfterNaming: PendingProjectAction | null = null;
 /** A crash-recovery snapshot (issue #15) found at launch, shown once as its
  * own modal asking whether to recover; `null` once resolved. */
 let pendingRecovery: RecoverySnapshot | null = null;
+/** Set only while this session itself started timeline playback (issue
+ * #18), so the playhead shows for timeline playback and not for a take or
+ * block's own "Play" button — `state.is_playing` alone doesn't say which
+ * one is running, since all three share one flag. */
+let timelinePlaybackActive = false;
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>'"]/g, (character) => `&#${character.charCodeAt(0)};`);
@@ -159,6 +165,36 @@ function timelinePlacements(state: ProjectState): string {
       return `<div class="timeline-placement" style="--placement-color: ${placement.color}; left: ${left}px; width: ${width}px;" data-placement="${placement.id}">${escapeHtml(placement.name)}</div>`;
     })
     .join("");
+}
+
+/** How many pulses the whole arrangement spans, across every track — the
+ * same span `Command::PlayTimeline` turns into a note stream, so the
+ * playhead's travel distance and duration match exactly what plays. */
+function timelineTotalPulses(state: ProjectState): number {
+  return state.placements.reduce((end, placement) => {
+    const length = placement.notes.reduce((noteEnd, note) => Math.max(noteEnd, note.end_pulse), 0);
+    return Math.max(end, placement.start_pulse + length);
+  }, 0);
+}
+
+/** Mirrors `daw_core::pulse_elapsed_time`: pulses to milliseconds at `bpm`. */
+function pulseElapsedMs(pulses: number, bpm: number): number {
+  return bpm > 0 ? (pulses * 60_000) / (bpm * PULSES_PER_BEAT) : 0;
+}
+
+/**
+ * A visible marker of playback position while the timeline plays (issue
+ * #18). Its travel and duration are computed here, purely for animation —
+ * the core's own timer (mirrored by `schedulePlaybackRefresh`) is still
+ * what actually ends playback; this only has to look right for that same
+ * span.
+ */
+function timelinePlayhead(state: ProjectState): string {
+  if (!state.is_playing || !timelinePlaybackActive) return "";
+  const pxPerPulse = TIMELINE_ZOOM_PX_PER_PULSE[timelineZoom];
+  const distance = timelineTotalPulses(state) * pxPerPulse;
+  const durationMs = pulseElapsedMs(timelineTotalPulses(state), state.bpm);
+  return `<div class="timeline-playhead" style="--playhead-distance: ${distance}px; animation-duration: ${durationMs}ms;" aria-hidden="true"></div>`;
 }
 
 function render(root: HTMLElement, state: ProjectState): void {
@@ -296,6 +332,19 @@ function render(root: HTMLElement, state: ProjectState): void {
       <section class="timeline" aria-label="Timeline">
         <div class="timeline__header">
           <h2>Timeline</h2>
+          <button
+            class="timeline__play"
+            type="button"
+            data-play-timeline
+            ${
+              (state.is_playing && !timelinePlaybackActive) ||
+              (!state.is_playing && state.placements.length === 0)
+                ? "disabled"
+                : ""
+            }
+          >
+            ${state.is_playing && timelinePlaybackActive ? "Stop (Space)" : "Play timeline (Space)"}
+          </button>
           <div class="timeline__zoom" role="group" aria-label="Timeline zoom">
             <button type="button" data-timeline-zoom="overview" aria-pressed="${timelineZoom === "overview"}">Overview</button>
             <button type="button" data-timeline-zoom="normal" aria-pressed="${timelineZoom === "normal"}">Normal</button>
@@ -306,6 +355,7 @@ function render(root: HTMLElement, state: ProjectState): void {
           <div class="timeline__track">
             ${timelineGrid(state)}
             <div class="timeline__placements">${timelinePlacements(state)}</div>
+            ${timelinePlayhead(state)}
           </div>
         </div>
       </section>
@@ -439,9 +489,38 @@ async function endRecording(root: HTMLElement): Promise<void> {
   render(root, applied.state);
 }
 
+/**
+ * The core's `is_playing` flag reverts to false purely server-side, once
+ * the shell's own timer decides a schedule has finished (see
+ * `play_take_schedule` in `src-tauri/src/lib.rs`) — nothing pushes that
+ * back to the webview. This mirrors that same duration so the UI refreshes
+ * itself shortly after, rather than leaving play/record controls (and, for
+ * the timeline, the playhead) looking like playback is still running.
+ */
+function schedulePlaybackRefresh(root: HTMLElement, totalPulses: number, bpm: number): void {
+  const durationMs = pulseElapsedMs(totalPulses, bpm);
+  window.setTimeout(() => {
+    void fetchProjectState().then((state) => {
+      // A newer playback may have started in the meantime; only settle if
+      // this is still the one that finished.
+      if (!state.is_playing) {
+        timelinePlaybackActive = false;
+        render(root, state);
+      }
+    });
+  }, durationMs + 50);
+}
+
 async function playTake(root: HTMLElement): Promise<void> {
   const applied = await applyCommand({ type: "playTake" });
   render(root, applied.state);
+  if (applied.state.is_playing && applied.state.take) {
+    // Playback schedules the take's *resolved* view (trim + quantisation
+    // applied), not its raw length — see `Take::notes()` in the core —
+    // so the refresh timer has to match that, not `takeEndPulse`'s raw span.
+    const length = applied.state.take.notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
+    schedulePlaybackRefresh(root, length, applied.state.bpm);
+  }
 }
 
 async function setTakeTrim(root: HTMLElement, startPulse: number, endPulse: number): Promise<void> {
@@ -462,7 +541,33 @@ async function addTakeToLibrary(root: HTMLElement): Promise<void> {
 }
 
 async function playBlock(root: HTMLElement, index: number): Promise<void> {
+  const block = currentState?.blocks[index];
   const applied = await applyCommand({ type: "playBlock", payload: index });
+  render(root, applied.state);
+  if (applied.state.is_playing && block) {
+    const length = block.notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
+    schedulePlaybackRefresh(root, length, applied.state.bpm);
+  }
+}
+
+/**
+ * Plays the whole arrangement from the beginning (issue #18): the timeline
+ * play button, and `Space` when nothing is already playing.
+ */
+async function playTimeline(root: HTMLElement): Promise<void> {
+  const applied = await applyCommand({ type: "playTimeline" });
+  timelinePlaybackActive = applied.state.is_playing;
+  render(root, applied.state);
+  if (applied.state.is_playing) {
+    schedulePlaybackRefresh(root, timelineTotalPulses(applied.state), applied.state.bpm);
+  }
+}
+
+/** `Space` while something is already playing (issue #18): stops it
+ * immediately rather than waiting for it to finish on its own. */
+async function stopCurrentPlayback(root: HTMLElement): Promise<void> {
+  timelinePlaybackActive = false;
+  const applied = await stopPlayback();
   render(root, applied.state);
 }
 
@@ -659,12 +764,42 @@ function wireQuitWarning(root: HTMLElement): void {
  * core knowing. */
 function wireTimelineControls(root: HTMLElement): void {
   root.addEventListener("click", (event) => {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
-      "[data-timeline-zoom]",
-    );
-    if (!button?.dataset.timelineZoom) return;
-    timelineZoom = button.dataset.timelineZoom as TimelineZoom;
-    render(root, currentState!);
+    const target = event.target as HTMLElement;
+
+    const zoomButton = target.closest<HTMLButtonElement>("[data-timeline-zoom]");
+    if (zoomButton?.dataset.timelineZoom) {
+      timelineZoom = zoomButton.dataset.timelineZoom as TimelineZoom;
+      render(root, currentState!);
+    }
+
+    if (target.closest("[data-play-timeline]")) {
+      if (currentState?.is_playing) {
+        void stopCurrentPlayback(root);
+      } else {
+        void playTimeline(root);
+      }
+    }
+  });
+
+  window.addEventListener("keydown", (event) => {
+    if (event.code !== "Space" && event.key !== " ") return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const active = document.activeElement;
+    // Never hijack Space while the user is typing or operating a control
+    // that treats Space as its own gesture (a button, a range slider).
+    if (
+      active instanceof HTMLInputElement ||
+      active instanceof HTMLSelectElement ||
+      active instanceof HTMLButtonElement
+    ) {
+      return;
+    }
+    event.preventDefault();
+    if (currentState?.is_playing) {
+      void stopCurrentPlayback(root);
+    } else {
+      void playTimeline(root);
+    }
   });
 }
 

@@ -13,6 +13,7 @@ mod midi;
 mod project_storage;
 mod recording;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -38,6 +39,15 @@ const DEBUG_NOTE_DURATION: Duration = Duration::from_millis(500);
 /// spec calls for reporting that rather than crashing, so the app keeps
 /// running with sound simply unavailable.
 struct AudioEngineHandle(Mutex<Option<AudioEngine>>);
+
+/// Bumped every time playback starts or is explicitly stopped (issue #18).
+/// `play_take_schedule`'s completion timer captures the value current when
+/// it starts and only applies `Command::PlaybackFinished` if nothing has
+/// bumped it since — otherwise a `stop_playback` call (or a fresh playback
+/// started right after) would leave a stale timer free to apply
+/// `PlaybackFinished` to whatever plays *next*, well after the schedule it
+/// was actually timing has already ended.
+struct PlaybackGeneration(AtomicU64);
 
 struct ProjectStorage(Mutex<FileStorage>);
 struct CurrentProjectName(Mutex<Option<String>>);
@@ -175,6 +185,15 @@ fn play_take_schedule(app: &AppHandle, take: &Take, bpm: u16) {
         }
     };
 
+    // See `PlaybackGeneration`'s doc comment: this schedule's own generation,
+    // captured now so the completion timer below can tell whether it's still
+    // the one in charge by the time it wakes up.
+    let generation = app
+        .state::<PlaybackGeneration>()
+        .0
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
+
     // Always resolves eventually — immediately if there was nothing to play,
     // otherwise after the schedule's own length — so `is_playing` can never
     // get stuck true with no audio actually sounding.
@@ -183,8 +202,45 @@ fn play_take_schedule(app: &AppHandle, take: &Take, bpm: u16) {
         if started {
             thread::sleep(total_duration);
         }
-        dispatch(&app, Command::PlaybackFinished);
+        if app.state::<PlaybackGeneration>().0.load(Ordering::SeqCst) == generation {
+            dispatch(&app, Command::PlaybackFinished);
+        }
     });
+}
+
+/// Stops whatever is currently playing (issue #18's "`Space` stops
+/// playback"): silences the audio engine's active schedule immediately and
+/// applies `Command::PlaybackFinished` right away, rather than waiting for
+/// `play_take_schedule`'s timer — which this also invalidates, via
+/// `PlaybackGeneration`, so it can't later reapply `PlaybackFinished` to
+/// whatever plays next. A no-op if nothing is playing.
+#[tauri::command]
+fn stop_playback(app: AppHandle) -> Applied {
+    let is_playing = {
+        let core = app.state::<Mutex<DawCore>>();
+        let core = core.lock().expect("DawCore mutex poisoned");
+        core.state().is_playing
+    };
+    if !is_playing {
+        let core = app.state::<Mutex<DawCore>>();
+        let core = core.lock().expect("DawCore mutex poisoned");
+        return Applied {
+            state: core.state().clone(),
+            effects: Vec::new(),
+        };
+    }
+
+    app.state::<PlaybackGeneration>()
+        .0
+        .fetch_add(1, Ordering::SeqCst);
+    {
+        let engine = app.state::<AudioEngineHandle>();
+        let mut engine = engine.0.lock().expect("audio engine mutex poisoned");
+        if let Some(engine) = engine.as_mut() {
+            let _ = engine.stop_schedule();
+        }
+    }
+    dispatch(&app, Command::PlaybackFinished)
 }
 
 /// Finishes recording: turns the shell's buffered MIDI capture into a
@@ -497,6 +553,7 @@ pub fn run() {
                 }
             };
             app.manage(AudioEngineHandle(Mutex::new(engine)));
+            app.manage(PlaybackGeneration(AtomicU64::new(0)));
             app.manage(RecordingHandle(Mutex::new(None)));
 
             // The one-line preference lives under the OS app-data directory,
@@ -537,6 +594,7 @@ pub fn run() {
             resolve_recovery,
             play_test_note,
             stop_recording,
+            stop_playback,
             list_midi_devices,
             select_midi_device
         ])

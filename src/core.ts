@@ -83,6 +83,7 @@ export type Command =
   | { type: "recolourBlock"; payload: { id: number; color: string } }
   | { type: "deleteBlock"; payload: number }
   | { type: "playTake" }
+  | { type: "playTimeline" }
   | { type: "undo" }
   | { type: "redo" };
 
@@ -151,6 +152,15 @@ export function resolveRecovery(accept: boolean): Promise<Applied> {
  */
 export function stopRecording(): Promise<Applied> {
   return invoke<Applied>("stop_recording");
+}
+
+/**
+ * Stops whatever is currently playing (issue #18): silences the audio
+ * engine immediately rather than waiting for a schedule to finish on its
+ * own. A no-op if nothing is playing.
+ */
+export function stopPlayback(): Promise<Applied> {
+  return invoke<Applied>("stop_playback");
 }
 
 /**
