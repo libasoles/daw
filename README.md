@@ -9,8 +9,9 @@ full specification and [`CONTEXT.md`](CONTEXT.md) for the vocabulary.
 
 ## Status
 
-Milestone **H1**, in progress. The shell exists and opens a window; nothing is
-musical yet. No MIDI, no audio.
+Milestone **H1**, in progress. The shell opens a window and now makes sound: a
+"Play test note" button sounds a piano note through a bundled SoundFont. No
+MIDI input yet, and no way to play more than one fixed debug note.
 
 ## Requirements
 
@@ -47,6 +48,7 @@ Also available: `npm run typecheck` (frontend only) and `npm run frontend:build`
 Cargo.toml        Rust workspace root
 core/             daw-core: the musical core. No Tauri, no I/O, all the tests.
 src-tauri/        daw: the desktop shell. The only crate that knows Tauri exists.
+src-tauri/assets/soundfonts/  The bundled SoundFont; see its NOTICE.md for license and source.
 src/              The frontend. Presentation only — no musical logic.
 index.html        Vite entry point
 ```
@@ -69,6 +71,28 @@ keyboard, an audio device or a filesystem — the four ports are faked.
 
 The webview and the Tauri bridge are deliberately untested: both are thin enough
 that pushing the seam this high is what makes leaving them alone defensible.
+
+## Sound
+
+`daw-core` defines the `Synth` port (`note_on`/`note_off`/`render`, instruments
+named by an opaque id) and is tested against a spy fake — see
+`core/tests/synth_port.rs`. The real implementation, `src-tauri`'s `RustySynth`,
+is backed by [`rustysynth`](https://crates.io/crates/rustysynth) and a bundled
+General MIDI SoundFont (`src-tauri/assets/soundfonts/TimGM6mb.sf2`; license and
+source in that directory's `NOTICE.md`).
+
+Audio output is split across two threads because `cpal`'s render callback runs
+on a real-time thread where blocking and allocation are forbidden, and neither
+`DawCore` nor `rustysynth`'s rendering belongs there: a non-real-time **synth
+thread** owns the real `Synth` and renders into a lock-free queue
+([`rtrb`](https://crates.io/crates/rtrb)); the real-time callback only pops
+already-rendered samples from that queue. See `src-tauri/src/audio/mod.rs` for
+the full design, and `CONTEXT.md`'s "synth thread" entry for the vocabulary.
+
+This is not exercised by `cargo test` — there is no sound hardware in CI to
+confirm against, and the spec is explicit that `rustysynth` and `cpal` are
+"exercised by hand" behind their ports. Confirming that a note actually sounds
+means running `npm run dev` (or the built app) and pressing "Play test note."
 
 ## Typography and the dark palette
 

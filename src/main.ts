@@ -8,9 +8,15 @@
  * core returns the new `ProjectState`, and this module renders it back.
  * `Cmd+Z` / `Cmd+Shift+Z` prove the same round trip is undoable. The three
  * real regions (recording area, library, timeline) follow in H1-H3.
+ *
+ * Issue #4 adds one more, deliberately temporary control: a "Play test note"
+ * button. It bypasses `Command`/`DawCore` entirely (there is nothing about
+ * sounding a fixed debug note that belongs in project state) and calls
+ * `play_test_note` directly, purely so a human can confirm audio reaches the
+ * speakers before MIDI input (#6) exists to trigger notes for real.
  */
 
-import { applyCommand, fetchProjectState, type ProjectState } from "./core";
+import { applyCommand, fetchProjectState, playTestNote, type ProjectState } from "./core";
 
 /** Three stacked blocks on a timeline — the shape the whole app is about. */
 const mark = /* html */ `
@@ -50,7 +56,10 @@ function render(root: HTMLElement, state: ProjectState): void {
         </label>
         <button class="tempo__step" type="button" data-tempo-step="1" aria-label="Increase tempo">+</button>
       </div>
-      <p class="placeholder__status">no project &mdash; nothing to play yet</p>
+      <button class="test-note" type="button" data-play-test-note>
+        Play test note
+      </button>
+      <p class="placeholder__status" data-audio-status>no project &mdash; nothing to play yet</p>
     </section>
   `;
 }
@@ -93,6 +102,26 @@ function wireTempoControls(root: HTMLElement): void {
   });
 }
 
+function showAudioStatus(root: HTMLElement, message: string): void {
+  const status = root.querySelector<HTMLElement>("[data-audio-status]");
+  if (status) {
+    status.textContent = message;
+  }
+}
+
+function wireTestNoteButton(root: HTMLElement): void {
+  root.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
+      "[data-play-test-note]",
+    );
+    if (!button) return;
+
+    playTestNote()
+      .then(() => showAudioStatus(root, "played a test note"))
+      .catch((error: unknown) => showAudioStatus(root, `could not play a test note: ${String(error)}`));
+  });
+}
+
 function wireUndoRedoKeys(root: HTMLElement): void {
   window.addEventListener("keydown", (event) => {
     if (!event.metaKey || event.key.toLowerCase() !== "z") return;
@@ -114,6 +143,7 @@ async function main(): Promise<void> {
   const state = await fetchProjectState();
   render(root, state);
   wireTempoControls(root);
+  wireTestNoteButton(root);
   wireUndoRedoKeys(root);
 }
 

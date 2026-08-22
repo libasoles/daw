@@ -23,6 +23,8 @@ use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
+pub mod ports;
+
 /// Everything about a piece of music that gets persisted.
 ///
 /// This is exactly the structure serialised to `project.json` and

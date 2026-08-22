@@ -52,6 +52,29 @@ missing device. The core performs no I/O.
 **Port** — a trait the core depends on and the shell implements: `Synth`,
 `MidiInput`, `AudioOutput`, `Storage`. Real in production, faked in tests.
 
+**Synth** — the port (`daw_core::ports::Synth`) that turns note on/off
+requests into sound: `note_on`, `note_off`, `render`. Instruments are named
+by an opaque `InstrumentId`, never by an enum baked into the trait, so a
+third instrument is a data change, not a trait change. The real
+implementation (`src-tauri`'s `RustySynth`) is backed by `rustysynth` and a
+bundled SoundFont; tests use a spy that records which notes it was asked to
+sound and at which pulse.
+
+**The synth thread** — the non-real-time OS thread (`src-tauri`'s `audio`
+module) that owns the real `Synth` and does the actual rendering. It exists
+because `cpal`'s render callback runs on a real-time audio thread where
+blocking and allocation are forbidden, and neither `DawCore` nor
+`rustysynth`'s rendering is safe to run there. The synth thread drains note
+on/off requests and pushes rendered samples into a lock-free queue; the
+real-time callback only pops already-rendered samples from that queue and
+copies them to the output device — it never calls into `Synth` or `DawCore`
+directly. The two threads are connected by `rtrb` ring buffers: fixed
+capacity, allocated once, wait-free to push and pop. There is no timeline yet
+to schedule from, so today the synth thread's input is a single debug note
+on/off request; the queue is the extension point later tickets (#6 live
+MIDI-through, #8 recording/playback) feed a real schedule through, without
+restructuring the thread split.
+
 **Undo log** — how undo is implemented: a bounded ring of at least 50 applied
 commands, each paired with its inverse. `Undo` applies the most recent inverse
 and moves that entry to a redo log; `Redo` reapplies it and moves it back.

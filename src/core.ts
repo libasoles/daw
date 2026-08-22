@@ -40,3 +40,14 @@ export function applyCommand(command: Command): Promise<Applied> {
 export function fetchProjectState(): Promise<ProjectState> {
   return invoke<ProjectState>("project_state");
 }
+
+/**
+ * Sounds a single fixed note through the bundled SoundFont, for manual
+ * verification that audio reaches the speakers (issue #4). There is no MIDI
+ * input (#6) or instrument choice (#5) yet, so this is a deliberately
+ * temporary debug trigger, not a feature described anywhere in the spec.
+ * Rejects if no audio output device is available.
+ */
+export function playTestNote(): Promise<void> {
+  return invoke<void>("play_test_note");
+}
