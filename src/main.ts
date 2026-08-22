@@ -800,6 +800,12 @@ function wireProjectControls(root: HTMLElement): void {
   });
 
   window.addEventListener("keydown", (event) => {
+    if (pendingProjectAction && event.key === "Tab") {
+      event.preventDefault();
+      root.querySelector<HTMLButtonElement>("[data-unsaved-save]")?.focus();
+      return;
+    }
+    if (pendingProjectAction) return;
     if (!event.metaKey || event.key.toLowerCase() !== "s") return;
     event.preventDefault();
     void saveCurrentProject(root);
