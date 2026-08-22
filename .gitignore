@@ -1,0 +1,14 @@
+.DS_Store
+
+# Tooling artifacts (vendored skills pack, installer-managed)
+.claude/
+.agents/
+skills-lock.json
+
+# Rust
+/target
+**/*.rs.bk
+
+# Node
+node_modules/
+dist/
