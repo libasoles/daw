@@ -31,6 +31,18 @@ export interface Block {
   notes: RecordedNote[];
 }
 
+/** A block placed on the timeline (issue #17): an independent copy of the
+ * block's notes/name/colour/instrument, never a reference. */
+export interface Placement {
+  id: number;
+  track: number;
+  start_pulse: number;
+  name: string;
+  color: string;
+  instrument: number;
+  notes: RecordedNote[];
+}
+
 export type Quantisation = "off" | "whole" | "half" | "quarter" | "eighth";
 
 export interface ProjectState {
@@ -44,6 +56,8 @@ export interface ProjectState {
   take: Take | null;
   blocks: Block[];
   next_block_id: number;
+  placements: Placement[];
+  next_placement_id: number;
   is_recording: boolean;
   is_playing: boolean;
 }
@@ -64,6 +78,7 @@ export type Command =
   | { type: "setTakeQuantisation"; payload: Quantisation }
   | { type: "addTakeToLibrary" }
   | { type: "playBlock"; payload: number }
+  | { type: "addPlacement"; payload: { block_id: number; track: number } }
   | { type: "renameBlock"; payload: { id: number; name: string } }
   | { type: "recolourBlock"; payload: { id: number; color: string } }
   | { type: "deleteBlock"; payload: number }

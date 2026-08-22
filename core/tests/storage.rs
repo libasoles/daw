@@ -29,6 +29,10 @@ fn memory_storage_round_trips_every_persisted_project_setting_by_name() {
         id: 1,
         color: "#60a5fa".into(),
     });
+    core.apply(Command::AddPlacement {
+        block_id: 1,
+        track: 0,
+    });
 
     let document = serde_json::to_string(&core.project_document()).unwrap();
     storage.save("first-song", document.clone()).unwrap();

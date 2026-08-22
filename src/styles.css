@@ -496,6 +496,30 @@ body {
   stroke-width: 1.5;
 }
 
+.timeline__track {
+  position: relative;
+}
+
+.timeline__placements {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.timeline-placement {
+  position: absolute;
+  top: 8px;
+  height: 104px;
+  overflow: hidden;
+  padding: var(--space-1);
+  border-left: 4px solid var(--placement-color);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--placement-color) 20%, var(--surface-raised));
+  color: var(--ink);
+  font-size: var(--text-xs);
+  pointer-events: auto;
+}
+
 /* --- The app's one modal dialog (issue #14): warns before discarding
    unsaved work on a new project, a project switch, or quit. ------------- */
 

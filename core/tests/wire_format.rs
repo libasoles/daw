@@ -87,6 +87,14 @@ fn commands_serialise_as_an_adjacently_tagged_object() {
         serde_json::json!({ "type": "playbackFinished" })
     );
     assert_eq!(
+        serde_json::to_value(Command::AddPlacement {
+            block_id: 1,
+            track: 0
+        })
+        .unwrap(),
+        serde_json::json!({ "type": "addPlacement", "payload": { "block_id": 1, "track": 0 } })
+    );
+    assert_eq!(
         serde_json::to_value(Command::Undo).unwrap(),
         serde_json::json!({ "type": "undo" })
     );
@@ -121,6 +129,8 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
             take: None,
             blocks: Vec::new(),
             next_block_id: 1,
+            placements: Vec::new(),
+            next_placement_id: 1,
             is_recording: false,
             is_playing: false,
         },
@@ -141,6 +151,8 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
                 "take": null,
                 "blocks": [],
                 "next_block_id": 1,
+                "placements": [],
+                "next_placement_id": 1,
                 "is_recording": false,
                 "is_playing": false
             },

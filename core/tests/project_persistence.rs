@@ -29,6 +29,7 @@ fn opening_a_saved_project_restores_every_setting_and_every_block() {
         id: block_id,
         color: "#60a5fa".into(),
     });
+    core.apply(Command::AddPlacement { block_id, track: 0 });
 
     let saved_document = core.project_document();
 
@@ -50,6 +51,8 @@ fn opening_a_saved_project_restores_every_setting_and_every_block() {
     assert_eq!(reopened.state().blocks.len(), 1);
     assert_eq!(reopened.state().blocks[0].name, "Verse");
     assert_eq!(reopened.state().blocks[0].color, "#60a5fa");
+    assert_eq!(reopened.state().placements.len(), 1);
+    assert_eq!(reopened.state().placements[0].name, "Verse");
 
     // A freshly opened project starts clean: further saves stay disabled
     // until something actually changes.

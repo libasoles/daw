@@ -72,6 +72,9 @@ pub struct ProjectState {
     /// Frozen blocks held by the library.
     pub blocks: Vec<Block>,
     pub next_block_id: u64,
+    /// Blocks placed on the timeline (issue #17).
+    pub placements: Vec<Placement>,
+    pub next_placement_id: u64,
     /// Whether the shell is currently capturing live MIDI into a take.
     /// A performance/session flag, not a musical edit — see
     /// [`Command::StartRecording`].
@@ -104,6 +107,44 @@ pub struct Block {
 const BLOCK_COLORS: [&str; 6] = [
     "#f87171", "#fbbf24", "#34d399", "#60a5fa", "#a78bfa", "#f472b6",
 ];
+
+/// A block placed on the timeline (CONTEXT.md's "Placement"): an
+/// **independent copy** of the block's notes, name, colour and instrument,
+/// not a reference. Blocks are immutable, so a copy behaves identically to a
+/// reference during playback, and the copy is what lets deleting a block
+/// from the library later (#23) leave existing placements exactly as they
+/// sound today rather than silently altering the arrangement.
+///
+/// `track` and `start_pulse` are stored explicitly — rather than, say, the
+/// placement's index in an ordered list standing in for its position — so
+/// that adding a second track later (per the spec) is a data change, not a
+/// rewrite of how placements are addressed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Placement {
+    pub id: u64,
+    pub track: u32,
+    pub start_pulse: u64,
+    pub name: String,
+    pub color: String,
+    pub instrument: InstrumentId,
+    pub notes: Vec<RecordedNote>,
+}
+
+impl Placement {
+    /// How many pulses this placement spans, from its own start. Used to
+    /// find where the *next* placement on a track lands flush.
+    fn length(&self) -> u64 {
+        self.notes
+            .iter()
+            .map(|note| note.end_pulse)
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn end_pulse(&self) -> u64 {
+        self.start_pulse + self.length()
+    }
+}
 
 /// A recording in the recording area (CONTEXT.md's "Take"): the raw notes
 /// exactly as played. There is at most one at a time, and it is never
@@ -262,6 +303,8 @@ impl Default for ProjectState {
             take: None,
             blocks: Vec::new(),
             next_block_id: 1,
+            placements: Vec::new(),
+            next_placement_id: 1,
             is_recording: false,
             is_playing: false,
         }
@@ -354,6 +397,19 @@ pub enum Command {
     InsertBlock(Block),
     RemoveBlock(Block),
     PlayBlock(usize),
+    /// Drops `block_id` onto `track` (issue #17): lands as an independent
+    /// copy, flush after the existing placements on that track, snapped to
+    /// the pulse. A no-op — nothing added, no effect, nothing to undo — if
+    /// the block no longer exists. Never overlaps an existing placement by
+    /// construction (it always lands at or after the rightmost one on the
+    /// track); a real "drop somewhere specific" that could conflict arrives
+    /// with #20's insert-with-push.
+    AddPlacement {
+        block_id: u64,
+        track: u32,
+    },
+    InsertPlacement(Placement),
+    RemovePlacement(Placement),
     RenameBlock {
         id: u64,
         name: String,
@@ -692,6 +748,49 @@ impl DawCore {
                 self.state.is_playing = false;
                 Vec::new()
             }
+            Command::AddPlacement { block_id, track } => {
+                if let Some(block) = self.state.blocks.iter().find(|block| block.id == block_id) {
+                    // Always lands flush after the rightmost placement on
+                    // this track, which by construction can never overlap
+                    // an existing one — there is no other way to reach this
+                    // command yet (that's #20's "insert with push, and
+                    // reorder"), so there is nothing here to reject.
+                    let start_pulse = self
+                        .state
+                        .placements
+                        .iter()
+                        .filter(|placement| placement.track == track)
+                        .map(Placement::end_pulse)
+                        .max()
+                        .unwrap_or(0);
+                    let placement = Placement {
+                        id: self.state.next_placement_id,
+                        track,
+                        start_pulse,
+                        name: block.name.clone(),
+                        color: block.color.clone(),
+                        instrument: block.instrument,
+                        notes: block.notes.clone(),
+                    };
+                    self.state.placements.push(placement.clone());
+                    self.state.next_placement_id += 1;
+                    self.log(
+                        Command::InsertPlacement(placement.clone()),
+                        Command::RemovePlacement(placement),
+                    );
+                }
+                Vec::new()
+            }
+            Command::InsertPlacement(placement) => {
+                self.state.placements.push(placement);
+                Vec::new()
+            }
+            Command::RemovePlacement(placement) => {
+                self.state
+                    .placements
+                    .retain(|candidate| candidate != &placement);
+                Vec::new()
+            }
         };
 
         self.sync_dirty_state();
@@ -785,6 +884,10 @@ impl DawCore {
                 }
             }
             Command::DeleteBlock(_) => {}
+            Command::InsertPlacement(placement) => state.placements.push(placement.clone()),
+            Command::RemovePlacement(placement) => {
+                state.placements.retain(|candidate| candidate != placement);
+            }
             Command::SetTakeTrim(trim) => {
                 if let Some(take) = state.take.as_mut() {
                     take.set_trim(*trim);
@@ -803,6 +906,7 @@ impl DawCore {
             | Command::StartRecording { .. }
             | Command::PlayTake
             | Command::PlayBlock(_)
+            | Command::AddPlacement { .. }
             | Command::PlaybackFinished
             | Command::NewProject { .. }
             | Command::OpenProject { .. }

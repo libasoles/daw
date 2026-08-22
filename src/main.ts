@@ -141,6 +141,26 @@ function timelineGrid(state: ProjectState): string {
   return `<svg class="timeline-grid" width="${width}" height="120" viewBox="0 0 ${width} 120" aria-label="Timeline pulse grid">${lines}</svg>`;
 }
 
+/**
+ * Placements dropped on track 0 (issue #17), drawn as coloured blocks over
+ * the pulse grid at `start_pulse * pxPerPulse`. Each placement is an
+ * independent copy of a block's notes/name/colour, so this reads only from
+ * the placement itself — never back to `state.blocks` — exactly like a
+ * deleted block (#23) would leave it.
+ */
+function timelinePlacements(state: ProjectState): string {
+  const pxPerPulse = TIMELINE_ZOOM_PX_PER_PULSE[timelineZoom];
+  return state.placements
+    .filter((placement) => placement.track === 0)
+    .map((placement) => {
+      const length = placement.notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
+      const left = placement.start_pulse * pxPerPulse;
+      const width = Math.max(length * pxPerPulse, 2);
+      return `<div class="timeline-placement" style="--placement-color: ${placement.color}; left: ${left}px; width: ${width}px;" data-placement="${placement.id}">${escapeHtml(placement.name)}</div>`;
+    })
+    .join("");
+}
+
 function render(root: HTMLElement, state: ProjectState): void {
   currentState = state;
   root.innerHTML = /* html */ `
@@ -267,7 +287,7 @@ function render(root: HTMLElement, state: ProjectState): void {
       </div>
       <aside class="library" aria-label="Library">
         <h2>Library</h2>
-        ${state.blocks.map((block, index) => `<div class="library-block" style="--block-color: ${block.color}">${
+        ${state.blocks.map((block, index) => `<div class="library-block" style="--block-color: ${block.color}" draggable="true" data-drag-block="${block.id}">${
           block.id === editingBlockId
             ? `<input class="library-block__name-input" data-block-name-input="${block.id}" value="${escapeHtml(block.name)}" aria-label="Block name" />`
             : `<span data-block-name="${block.id}">${escapeHtml(block.name)}</span>`
@@ -282,7 +302,12 @@ function render(root: HTMLElement, state: ProjectState): void {
             <button type="button" data-timeline-zoom="close" aria-pressed="${timelineZoom === "close"}">Close</button>
           </div>
         </div>
-        <div class="timeline__scroll">${timelineGrid(state)}</div>
+        <div class="timeline__scroll" data-timeline-drop>
+          <div class="timeline__track">
+            ${timelineGrid(state)}
+            <div class="timeline__placements">${timelinePlacements(state)}</div>
+          </div>
+        </div>
       </section>
       <div class="midi-control" aria-label="MIDI input">
         <label class="sound-control">
@@ -643,6 +668,40 @@ function wireTimelineControls(root: HTMLElement): void {
   });
 }
 
+/**
+ * Dragging a block from the library onto the timeline (issue #17). The drop
+ * target only needs the dragged block's id — where it lands is never the
+ * drop's x position, since a placement always lands flush after the
+ * existing ones on the track (that's the whole ticket; a real "drop
+ * here specifically" arrives with #20's insert-with-push) — so a plain
+ * `text/plain` payload is enough, no custom drag data type needed.
+ */
+function wireBlockPlacementDragAndDrop(root: HTMLElement): void {
+  root.addEventListener("dragstart", (event) => {
+    const block = (event.target as HTMLElement).closest<HTMLElement>("[data-drag-block]");
+    if (!block?.dataset.dragBlock) return;
+    event.dataTransfer?.setData("text/plain", block.dataset.dragBlock);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy";
+  });
+
+  root.addEventListener("dragover", (event) => {
+    if (!(event.target as HTMLElement).closest("[data-timeline-drop]")) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  });
+
+  root.addEventListener("drop", (event) => {
+    if (!(event.target as HTMLElement).closest("[data-timeline-drop]")) return;
+    event.preventDefault();
+    const blockId = event.dataTransfer?.getData("text/plain");
+    if (!blockId) return;
+    void applyCommand({
+      type: "addPlacement",
+      payload: { block_id: Number(blockId), track: 0 },
+    }).then((applied) => render(root, applied.state));
+  });
+}
+
 function wireTempoControls(root: HTMLElement): void {
   root.addEventListener("click", (event) => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
@@ -912,6 +971,7 @@ async function main(): Promise<void> {
   wireUndoRedoKeys(root);
   wireQuitWarning(root);
   wireTimelineControls(root);
+  wireBlockPlacementDragAndDrop(root);
   await refreshMidiDevices(root);
   window.setInterval(() => void refreshMidiDevices(root), 1_000);
 }
