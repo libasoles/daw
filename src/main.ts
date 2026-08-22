@@ -1204,6 +1204,7 @@ function wireMidiPicker(root: HTMLElement): void {
 
 function wireUndoRedoKeys(root: HTMLElement): void {
   window.addEventListener("keydown", (event) => {
+    if (pendingProjectAction) return;
     if (!event.metaKey || event.key.toLowerCase() !== "z") return;
     event.preventDefault();
     if (event.shiftKey) {
@@ -1323,6 +1324,7 @@ function wireRecordingControls(root: HTMLElement): void {
   });
 
   window.addEventListener("keydown", (event) => {
+    if (pendingProjectAction) return;
     if (event.key.toLowerCase() !== "r") return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     const active = document.activeElement;
