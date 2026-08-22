@@ -445,6 +445,9 @@ pub enum Command {
     /// ever happens once, immediately at launch, before there is any current
     /// project whose unsaved changes could be at risk.
     RecoverProject(ProjectState),
+    /// Requests a manual save under an application-owned project name. The
+    /// core emits [`Effect::SaveProject`] for the shell's storage adapter.
+    SaveProject(String),
     /// Records that the shell successfully wrote the current document. This
     /// is not undoable: it changes the save baseline, not musical content.
     ProjectSaved,
@@ -651,6 +654,12 @@ pub enum Effect {
     /// to confirm, stating how many placements will be removed, then
     /// resend with `force: true` if they agree.
     ConfirmDeleteBlockInUse { uses: usize },
+    /// The shell should persist this durable project document under `name`.
+    /// It must report success by applying [`Command::ProjectSaved`].
+    SaveProject {
+        name: String,
+        document: ProjectState,
+    },
     /// `PlayTake` was applied with a take present: the shell should turn
     /// this into real audio and, once it has finished sounding, apply
     /// `PlaybackFinished`.
@@ -777,6 +786,10 @@ impl DawCore {
                 self.clear_history();
                 Vec::new()
             }
+            Command::SaveProject(name) => vec![Effect::SaveProject {
+                name,
+                document: self.project_document(),
+            }],
             Command::ProjectSaved => {
                 self.saved_state = Some(Self::document_state(&self.state));
                 Vec::new()
@@ -1362,6 +1375,7 @@ impl DawCore {
             | Command::NewProject { .. }
             | Command::OpenProject { .. }
             | Command::RecoverProject(_)
+            | Command::SaveProject(_)
             | Command::ProjectSaved
             | Command::Undo
             | Command::Redo => {}

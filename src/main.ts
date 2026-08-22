@@ -649,6 +649,7 @@ async function refreshProjects(root: HTMLElement): Promise<void> {
 }
 
 async function saveCurrentProject(root: HTMLElement, name?: string): Promise<void> {
+  if (!currentState?.is_dirty) return;
   if (!activeProjectName && !name) {
     isNamingProject = true;
     render(root, await fetchProjectState());

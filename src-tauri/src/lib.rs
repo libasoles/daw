@@ -356,12 +356,21 @@ fn save_project(app: AppHandle, requested_name: Option<String>) -> Result<Projec
     }
     .ok_or_else(|| "a project name is required for the first save".to_string())?;
 
-    let document = {
+    let request = {
         let core = app.state::<Mutex<DawCore>>();
-        let core = core.lock().expect("DawCore mutex poisoned");
-        serde_json::to_string(&core.project_document())
-            .map_err(|error| format!("could not encode project: {error}"))?
+        let mut core = core.lock().expect("DawCore mutex poisoned");
+        core.apply(Command::SaveProject(name.clone()))
     };
+    let Effect::SaveProject { name, document } = request
+        .effects
+        .into_iter()
+        .find(|effect| matches!(effect, Effect::SaveProject { .. }))
+        .ok_or_else(|| "save command did not request storage".to_string())?
+    else {
+        unreachable!("the match above only accepts save effects")
+    };
+    let document = serde_json::to_string(&document)
+        .map_err(|error| format!("could not encode project: {error}"))?;
 
     {
         let storage = app.state::<ProjectStorage>();

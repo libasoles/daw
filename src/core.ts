@@ -110,6 +110,7 @@ export type Effect =
   | { type: "confirmOverwriteRecording" }
   | { type: "confirmDiscardUnsavedChanges" }
   | { type: "confirmDeleteBlockInUse"; uses: number }
+  | { type: "saveProject"; name: string; document: ProjectState }
   | ({ type: "playSchedule" } & Take);
 
 export interface Applied {
