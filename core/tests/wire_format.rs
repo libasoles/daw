@@ -103,6 +103,26 @@ fn commands_serialise_as_an_adjacently_tagged_object() {
         serde_json::json!({ "type": "addPlacement", "payload": { "block_id": 1, "track": 0 } })
     );
     assert_eq!(
+        serde_json::to_value(Command::InsertPlacementAt {
+            block_id: 1,
+            track: 0,
+            index: 2
+        })
+        .unwrap(),
+        serde_json::json!({
+            "type": "insertPlacementAt",
+            "payload": { "block_id": 1, "track": 0, "index": 2 }
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(Command::ReorderPlacement {
+            id: 1,
+            new_index: 2
+        })
+        .unwrap(),
+        serde_json::json!({ "type": "reorderPlacement", "payload": { "id": 1, "new_index": 2 } })
+    );
+    assert_eq!(
         serde_json::to_value(Command::Undo).unwrap(),
         serde_json::json!({ "type": "undo" })
     );

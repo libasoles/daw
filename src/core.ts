@@ -81,6 +81,11 @@ export type Command =
   | { type: "addTakeToLibrary" }
   | { type: "playBlock"; payload: number }
   | { type: "addPlacement"; payload: { block_id: number; track: number } }
+  | {
+      type: "insertPlacementAt";
+      payload: { block_id: number; track: number; index: number };
+    }
+  | { type: "reorderPlacement"; payload: { id: number; new_index: number } }
   | { type: "renameBlock"; payload: { id: number; name: string } }
   | { type: "recolourBlock"; payload: { id: number; color: string } }
   | { type: "deleteBlock"; payload: number }

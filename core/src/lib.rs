@@ -152,6 +152,21 @@ impl Placement {
     }
 }
 
+/// Recomputes every placement's `start_pulse` in `order` sequentially from
+/// pulse 0, so they sit flush with no gaps and no overlap (CONTEXT.md's
+/// "Ripple") — the shared reflow step behind inserting-with-push and
+/// reordering (issue #20). `order` is every placement on one track, already
+/// arranged in the order they should end up in; contiguity and non-overlap
+/// hold afterward by construction, since each one starts exactly where the
+/// last one ended.
+fn reflow(order: &mut [Placement]) {
+    let mut cursor = 0u64;
+    for placement in order.iter_mut() {
+        placement.start_pulse = cursor;
+        cursor += placement.length();
+    }
+}
+
 /// A recording in the recording area (CONTEXT.md's "Take"): the raw notes
 /// exactly as played. There is at most one at a time, and it is never
 /// rewritten by any later edit — trimming and quantising (issues #9, #10)
@@ -422,6 +437,33 @@ pub enum Command {
     },
     InsertPlacement(Placement),
     RemovePlacement(Placement),
+    /// Drops `block_id` onto `track` at `index` within its ordered
+    /// placements — 0 is the very start, the track's current placement
+    /// count is the very end (matching `AddPlacement`'s flush-append) —
+    /// pushing everything from `index` onward later by the new placement's
+    /// length (issue #20). A no-op if the block no longer exists.
+    InsertPlacementAt {
+        block_id: u64,
+        track: u32,
+        index: usize,
+    },
+    /// Moves an existing placement to `new_index` within its track's
+    /// ordered placements, rippling the rest of the track to stay flush
+    /// (issue #20). A no-op if no placement has `id`.
+    ReorderPlacement {
+        id: u64,
+        new_index: usize,
+    },
+    /// Replaces every placement on `track` wholesale. The undo/redo
+    /// primitive behind `InsertPlacementAt`/`ReorderPlacement`: rippling a
+    /// track moves more than one placement at once, so a single before/
+    /// after pair for "this one placement's position" can't capture it —
+    /// this logs (and replays) the whole track's placements as one snapshot
+    /// instead, exactly as they were.
+    SetTrackPlacements {
+        track: u32,
+        placements: Vec<Placement>,
+    },
     /// Plays the whole arrangement from the beginning (issue #18): every
     /// track's placements, flattened into one immutable note stream in a
     /// single [`Effect::PlaySchedule`], exactly like `PlayTake`/`PlayBlock`
@@ -838,6 +880,102 @@ impl DawCore {
                     .retain(|candidate| candidate != &placement);
                 Vec::new()
             }
+            Command::InsertPlacementAt {
+                block_id,
+                track,
+                index,
+            } => {
+                if let Some(block) = self.state.blocks.iter().find(|block| block.id == block_id) {
+                    let before: Vec<Placement> = self
+                        .state
+                        .placements
+                        .iter()
+                        .filter(|placement| placement.track == track)
+                        .cloned()
+                        .collect();
+                    let mut ordered = before.clone();
+                    ordered.sort_by_key(|placement| placement.start_pulse);
+
+                    let new_placement = Placement {
+                        id: self.state.next_placement_id,
+                        track,
+                        start_pulse: 0,
+                        name: block.name.clone(),
+                        color: block.color.clone(),
+                        instrument: block.instrument,
+                        notes: block.notes.clone(),
+                    };
+                    self.state.next_placement_id += 1;
+                    ordered.insert(index.min(ordered.len()), new_placement);
+                    reflow(&mut ordered);
+
+                    self.state
+                        .placements
+                        .retain(|placement| placement.track != track);
+                    self.state.placements.extend(ordered.clone());
+                    self.log(
+                        Command::SetTrackPlacements {
+                            track,
+                            placements: ordered,
+                        },
+                        Command::SetTrackPlacements {
+                            track,
+                            placements: before,
+                        },
+                    );
+                }
+                Vec::new()
+            }
+            Command::ReorderPlacement { id, new_index } => {
+                if let Some(track) = self
+                    .state
+                    .placements
+                    .iter()
+                    .find(|placement| placement.id == id)
+                    .map(|placement| placement.track)
+                {
+                    let before: Vec<Placement> = self
+                        .state
+                        .placements
+                        .iter()
+                        .filter(|placement| placement.track == track)
+                        .cloned()
+                        .collect();
+                    let mut ordered = before.clone();
+                    ordered.sort_by_key(|placement| placement.start_pulse);
+
+                    let current_index = ordered
+                        .iter()
+                        .position(|placement| placement.id == id)
+                        .expect("id was just found on this track");
+                    let moved = ordered.remove(current_index);
+                    ordered.insert(new_index.min(ordered.len()), moved);
+                    reflow(&mut ordered);
+
+                    self.state
+                        .placements
+                        .retain(|placement| placement.track != track);
+                    self.state.placements.extend(ordered.clone());
+                    self.log(
+                        Command::SetTrackPlacements {
+                            track,
+                            placements: ordered,
+                        },
+                        Command::SetTrackPlacements {
+                            track,
+                            placements: before,
+                        },
+                    );
+                }
+                Vec::new()
+            }
+            Command::SetTrackPlacements { track, placements } => {
+                self.state
+                    .placements
+                    .retain(|placement| placement.track != track);
+                self.state.placements.extend(placements);
+                Vec::new()
+            }
         };
 
         self.sync_dirty_state();
@@ -935,6 +1073,12 @@ impl DawCore {
             Command::RemovePlacement(placement) => {
                 state.placements.retain(|candidate| candidate != placement);
             }
+            Command::SetTrackPlacements { track, placements } => {
+                state
+                    .placements
+                    .retain(|placement| placement.track != *track);
+                state.placements.extend(placements.iter().cloned());
+            }
             Command::SetTakeTrim(trim) => {
                 if let Some(take) = state.take.as_mut() {
                     take.set_trim(*trim);
@@ -955,6 +1099,8 @@ impl DawCore {
             | Command::PlayTake
             | Command::PlayBlock(_)
             | Command::AddPlacement { .. }
+            | Command::InsertPlacementAt { .. }
+            | Command::ReorderPlacement { .. }
             | Command::PlayTimeline
             | Command::PlaybackFinished
             | Command::NewProject { .. }

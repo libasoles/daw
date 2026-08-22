@@ -162,7 +162,7 @@ function timelinePlacements(state: ProjectState): string {
       const length = placement.notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
       const left = placement.start_pulse * pxPerPulse;
       const width = Math.max(length * pxPerPulse, 2);
-      return `<div class="timeline-placement" style="--placement-color: ${placement.color}; left: ${left}px; width: ${width}px;" data-placement="${placement.id}">${escapeHtml(placement.name)}</div>`;
+      return `<div class="timeline-placement" style="--placement-color: ${placement.color}; left: ${left}px; width: ${width}px;" data-placement="${placement.id}" draggable="true" data-drag-placement="${placement.id}">${escapeHtml(placement.name)}</div>`;
     })
     .join("");
 }
@@ -830,29 +830,99 @@ function wireTimelineControls(root: HTMLElement): void {
  * here specifically" arrives with #20's insert-with-push) — so a plain
  * `text/plain` payload is enough, no custom drag data type needed.
  */
+const DRAG_BLOCK_TYPE = "application/x-daw-block";
+const DRAG_PLACEMENT_TYPE = "application/x-daw-placement";
+
+/**
+ * Where a drop at `event.clientX` lands within `track`'s ordered
+ * placements (issue #20): the index of the first placement whose midpoint
+ * the drop is before, or the track's current length if it's past all of
+ * them (matching #17's flush-append). The drop's x position is what
+ * decides this, not which specific element it happened to land on, so a
+ * drop between two placements' edges still resolves sensibly.
+ */
+function computeDropIndex(event: DragEvent, track: number): number {
+  const ordered = (currentState?.placements ?? [])
+    .filter((placement) => placement.track === track)
+    .sort((a, b) => a.start_pulse - b.start_pulse);
+  const trackEl = (event.target as HTMLElement).closest<HTMLElement>(".timeline__track");
+  if (!trackEl) return ordered.length;
+  const dropX = event.clientX - trackEl.getBoundingClientRect().left;
+  const pxPerPulse = TIMELINE_ZOOM_PX_PER_PULSE[timelineZoom];
+  for (const [index, placement] of ordered.entries()) {
+    const length = placement.notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
+    const midpoint = (placement.start_pulse + length / 2) * pxPerPulse;
+    if (dropX < midpoint) return index;
+  }
+  return ordered.length;
+}
+
+/**
+ * Dragging a block from the library onto the timeline inserts it (issue
+ * #17 for a plain append, #20 for inserting between two placements, pushing
+ * the remainder later); dragging an existing placement reorders it, with
+ * the same push behaviour.
+ */
 function wireBlockPlacementDragAndDrop(root: HTMLElement): void {
   root.addEventListener("dragstart", (event) => {
     const block = (event.target as HTMLElement).closest<HTMLElement>("[data-drag-block]");
-    if (!block?.dataset.dragBlock) return;
-    event.dataTransfer?.setData("text/plain", block.dataset.dragBlock);
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy";
+    if (block?.dataset.dragBlock) {
+      event.dataTransfer?.setData(DRAG_BLOCK_TYPE, block.dataset.dragBlock);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy";
+      return;
+    }
+    const placement = (event.target as HTMLElement).closest<HTMLElement>(
+      "[data-drag-placement]",
+    );
+    if (placement?.dataset.dragPlacement) {
+      event.dataTransfer?.setData(DRAG_PLACEMENT_TYPE, placement.dataset.dragPlacement);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+    }
   });
 
   root.addEventListener("dragover", (event) => {
     if (!(event.target as HTMLElement).closest("[data-timeline-drop]")) return;
     event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = event.dataTransfer.types.includes(DRAG_PLACEMENT_TYPE)
+        ? "move"
+        : "copy";
+    }
   });
 
   root.addEventListener("drop", (event) => {
     if (!(event.target as HTMLElement).closest("[data-timeline-drop]")) return;
     event.preventDefault();
-    const blockId = event.dataTransfer?.getData("text/plain");
-    if (!blockId) return;
-    void applyCommand({
-      type: "addPlacement",
-      payload: { block_id: Number(blockId), track: 0 },
-    }).then((applied) => render(root, applied.state));
+    const track = 0;
+
+    const blockId = event.dataTransfer?.getData(DRAG_BLOCK_TYPE);
+    if (blockId) {
+      const index = computeDropIndex(event, track);
+      void applyCommand({
+        type: "insertPlacementAt",
+        payload: { block_id: Number(blockId), track, index },
+      }).then((applied) => render(root, applied.state));
+      return;
+    }
+
+    const placementId = event.dataTransfer?.getData(DRAG_PLACEMENT_TYPE);
+    if (placementId) {
+      const id = Number(placementId);
+      const ordered = (currentState?.placements ?? [])
+        .filter((placement) => placement.track === track)
+        .sort((a, b) => a.start_pulse - b.start_pulse);
+      const currentIndex = ordered.findIndex((placement) => placement.id === id);
+      let index = computeDropIndex(event, track);
+      // `Command::ReorderPlacement` computes `new_index` against the track
+      // with the dragged placement already removed; `computeDropIndex`
+      // doesn't know that, so adjust for a drop past the placement's own
+      // current position.
+      if (currentIndex !== -1 && index > currentIndex) index -= 1;
+      void applyCommand({
+        type: "reorderPlacement",
+        payload: { id, new_index: index },
+      }).then((applied) => render(root, applied.state));
+    }
   });
 }
 
