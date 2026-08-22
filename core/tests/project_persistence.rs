@@ -58,3 +58,29 @@ fn a_change_made_while_saving_stays_dirty_after_the_write_finishes() {
 
     assert!(core.state().is_dirty);
 }
+
+#[test]
+fn changing_projects_empties_work_or_loads_it_and_clears_undo_history() {
+    let mut core = DawCore::new();
+    core.apply(Command::StopRecording(Some(Default::default())));
+    core.apply(Command::AddTakeToLibrary);
+    core.apply(Command::SetBpm(140));
+
+    let fresh = core.apply(Command::NewProject);
+    assert!(fresh.state.take.is_none());
+    assert!(fresh.state.blocks.is_empty());
+    assert_eq!(
+        core.apply(Command::Undo).effects,
+        vec![Effect::NothingToUndo]
+    );
+
+    let mut saved = DawCore::new();
+    saved.apply(Command::SetBpm(90));
+    let document = saved.project_document();
+    let opened = core.apply(Command::OpenProject(document));
+    assert_eq!(opened.state.bpm, 90);
+    assert_eq!(
+        core.apply(Command::Undo).effects,
+        vec![Effect::NothingToUndo]
+    );
+}

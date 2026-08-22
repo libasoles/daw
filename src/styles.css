@@ -156,6 +156,40 @@ body {
   font-size: var(--text-xs);
 }
 
+.unsaved-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-content: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: color-mix(in srgb, var(--surface-base) 82%, transparent);
+}
+
+.unsaved-dialog > * {
+  margin: 0;
+}
+
+.unsaved-dialog button,
+.unsaved-dialog input,
+.inline-confirmation button {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font: inherit;
+}
+
+.inline-confirmation {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-1);
+  color: var(--ink-dim);
+}
+
 /* --- Tempo control (issue #3): proves the command seam end to end. ------ */
 
 .tempo {

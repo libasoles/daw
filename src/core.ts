@@ -107,6 +107,10 @@ export function openProject(name: string): Promise<Applied> {
   return invoke<Applied>("open_project", { name });
 }
 
+export function finishClose(): Promise<void> {
+  return invoke<void>("finish_close");
+}
+
 /**
  * Finishes recording: the shell turns the raw MIDI it captured natively into
  * a `Take` and applies it as `Command::StopRecording`. This can't be a

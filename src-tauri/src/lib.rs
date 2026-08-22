@@ -24,7 +24,7 @@ use daw_core::{
 use midi::{load_selected_device, spawn_reconnector, MidiInputHandle, MidiStatus};
 use project_storage::FileStorage;
 use recording::RecordingHandle;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
 /// The fixed note the debug trigger sounds. There is no MIDI input yet
 /// (issue #6), so this remains the only way to prove sound reaches the
@@ -41,6 +41,7 @@ struct AudioEngineHandle(Mutex<Option<AudioEngine>>);
 
 struct ProjectStorage(Mutex<FileStorage>);
 struct CurrentProjectName(Mutex<Option<String>>);
+struct AllowClose(Mutex<bool>);
 
 /// Lists native MIDI inputs and the live connection state for the picker.
 #[tauri::command]
@@ -271,6 +272,20 @@ fn open_project(app: AppHandle, name: String) -> Result<Applied, String> {
     Ok(applied)
 }
 
+/// Lets the frontend complete a close after it has resolved the one
+/// unsaved-changes decision. Normal close requests are intercepted below.
+#[tauri::command]
+fn finish_close(app: AppHandle) -> Result<(), String> {
+    *app.state::<AllowClose>()
+        .0
+        .lock()
+        .expect("close permission mutex poisoned") = true;
+    app.get_webview_window("main")
+        .ok_or_else(|| "main window was not found".to_string())?
+        .close()
+        .map_err(|error| format!("could not close window: {error}"))
+}
+
 /// Sounds a single fixed note for manual/test verification, since neither
 /// MIDI input (#6) nor the instrument dropdown (#5) exist yet to trigger one
 /// another way. Turns note-on into note-off after a fixed hold, on a plain
@@ -317,6 +332,7 @@ pub fn run() {
             let app_data_dir = app.path().app_data_dir()?;
             app.manage(ProjectStorage(Mutex::new(FileStorage::new(app_data_dir))));
             app.manage(CurrentProjectName(Mutex::new(None)));
+            app.manage(AllowClose(Mutex::new(false)));
 
             // A missing output device (or a corrupt bundled SoundFont) must
             // not crash the app — it is reported here and `play_test_note`
@@ -363,11 +379,36 @@ pub fn run() {
             save_project,
             list_projects,
             open_project,
+            finish_close,
             play_test_note,
             stop_recording,
             list_midi_devices,
             select_midi_device
         ])
+        .on_window_event(|window, event| {
+            let WindowEvent::CloseRequested { api, .. } = event else {
+                return;
+            };
+            let allow_close = window.state::<AllowClose>();
+            let mut allow_close = allow_close
+                .0
+                .lock()
+                .expect("close permission mutex poisoned");
+            if *allow_close {
+                *allow_close = false;
+                return;
+            }
+            let core = window.state::<Mutex<DawCore>>();
+            if core
+                .lock()
+                .expect("DawCore mutex poisoned")
+                .state()
+                .is_dirty
+            {
+                api.prevent_close();
+                let _ = window.emit("confirm-close", ());
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

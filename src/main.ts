@@ -17,6 +17,7 @@
 import {
   applyCommand,
   fetchProjectState,
+  finishClose,
   listProjects,
   listMidiDevices,
   openProject,
@@ -28,6 +29,7 @@ import {
   type ProjectState,
   type Quantisation,
 } from "./core";
+import { listen } from "@tauri-apps/api/event";
 
 /** Three stacked blocks on a timeline — the shape the whole app is about. */
 const mark = /* html */ `
@@ -49,6 +51,11 @@ let projects: string[] = [];
 let activeProjectName: string | null = null;
 let isNamingProject = false;
 let renderedProjectState: ProjectState | null = null;
+let confirmRecordingOverwrite = false;
+let editingBlockId: number | null = null;
+type PendingProjectAction = { type: "new" } | { type: "open"; name: string } | { type: "quit" };
+let pendingProjectAction: PendingProjectAction | null = null;
+let pendingSaveNeedsName = false;
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>'"]/g, (character) => `&#${character.charCodeAt(0)};`);
@@ -83,6 +90,7 @@ function render(root: HTMLElement, state: ProjectState): void {
       </p>
       <section class="project-controls" aria-label="Projects">
         <div class="project-controls__actions">
+          <button type="button" data-new-project>New project</button>
           <button type="button" data-save-project ${state.is_dirty ? "" : "disabled"}>Save</button>
           <span class="project-controls__status">${state.is_dirty ? "Unsaved changes" : "All changes saved"}</span>
         </div>
@@ -98,6 +106,15 @@ function render(root: HTMLElement, state: ProjectState): void {
           ${projects.length ? projects.map((name) => `<button type="button" data-open-project="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("") : "<span class=\"project-controls__empty\">No saved projects yet</span>"}
         </div>
       </section>
+      ${pendingProjectAction ? /* html */ `
+        <div class="unsaved-dialog" role="dialog" aria-modal="true" aria-label="Unsaved changes">
+          <p>Save changes before continuing?</p>
+          ${pendingSaveNeedsName ? `<label>Project name <input data-pending-project-name required autocomplete="off" /></label>` : ""}
+          <button type="button" data-save-pending>${pendingSaveNeedsName ? "Save and continue" : "Save and continue"}</button>
+          <button type="button" data-discard-pending>Discard changes</button>
+          <button type="button" data-cancel-pending>Cancel</button>
+        </div>
+      ` : ""}
       <div class="tempo" role="group" aria-label="Tempo">
         <button class="tempo__step" type="button" data-tempo-step="-1" aria-label="Decrease tempo">&minus;</button>
         <label class="tempo__readout">
@@ -195,9 +212,10 @@ function render(root: HTMLElement, state: ProjectState): void {
             : /* html */ `<span class="take-summary take-summary--empty">no take yet</span>`
         }
       </div>
+      ${confirmRecordingOverwrite ? /* html */ `<div class="inline-confirmation" role="status">Recording will replace the current take. <button type="button" data-confirm-recording-overwrite>Replace</button><button type="button" data-cancel-recording-overwrite>Cancel</button></div>` : ""}
       <aside class="library" aria-label="Library">
         <h2>Library</h2>
-        ${state.blocks.map((block, index) => `<div class="library-block" style="--block-color: ${block.color}"><span data-block-name="${block.id}">${block.name}</span><input data-block-color="${block.id}" type="color" value="${block.color}" /><button type="button" data-delete-block="${block.id}">Delete</button><button type="button" data-play-block="${index}"${state.is_playing ? " disabled" : ""}>Play</button></div>`).join("") || "<span class=\"take-summary take-summary--empty\">no blocks yet</span>"}
+        ${state.blocks.map((block, index) => `<div class="library-block" style="--block-color: ${block.color}">${editingBlockId === block.id ? `<label>Block name <input data-edit-block-name="${block.id}" value="${escapeHtml(block.name)}" /></label><button type="button" data-save-block-name="${block.id}">Save</button><button type="button" data-cancel-block-name>Cancel</button>` : `<span>${escapeHtml(block.name)}</span><button type="button" data-edit-block-name-button="${block.id}">Rename</button>`}<input data-block-color="${block.id}" type="color" value="${block.color}" /><button type="button" data-delete-block="${block.id}">Delete</button><button type="button" data-play-block="${index}"${state.is_playing ? " disabled" : ""}>Play</button></div>`).join("") || "<span class=\"take-summary take-summary--empty\">no blocks yet</span>"}
       </aside>
       <div class="midi-control" aria-label="MIDI input">
         <label class="sound-control">
@@ -279,14 +297,16 @@ async function startRecording(root: HTMLElement): Promise<void> {
     (effect) => effect.type === "confirmOverwriteRecording",
   );
   if (needsConfirmation) {
+    confirmRecordingOverwrite = true;
     render(root, applied.state);
-    if (!window.confirm("Recording will replace the current take. Continue?")) {
-      return;
-    }
-    const forced = await applyCommand({ type: "startRecording", payload: { force: true } });
-    render(root, forced.state);
     return;
   }
+  render(root, applied.state);
+}
+
+async function confirmRecordingOverwriteAction(root: HTMLElement): Promise<void> {
+  confirmRecordingOverwrite = false;
+  const applied = await applyCommand({ type: "startRecording", payload: { force: true } });
   render(root, applied.state);
 }
 
@@ -353,21 +373,76 @@ async function saveCurrentProject(root: HTMLElement, name?: string): Promise<voi
   render(root, state);
 }
 
+async function performProjectAction(root: HTMLElement, action: PendingProjectAction): Promise<void> {
+  if (action.type === "quit") {
+    await finishClose();
+    return;
+  }
+  if (action.type === "new") {
+    activeProjectName = null;
+    isNamingProject = false;
+    const applied = await applyCommand({ type: "newProject" });
+    render(root, applied.state);
+    return;
+  }
+  const applied = await openProject(action.name);
+  activeProjectName = action.name;
+  isNamingProject = false;
+  render(root, applied.state);
+}
+
+function requestProjectAction(root: HTMLElement, action: PendingProjectAction): void {
+  if (renderedProjectState?.is_dirty) {
+    pendingProjectAction = action;
+    pendingSaveNeedsName = false;
+    render(root, renderedProjectState);
+    return;
+  }
+  void performProjectAction(root, action);
+}
+
+async function savePendingProjectAction(root: HTMLElement): Promise<void> {
+  const action = pendingProjectAction;
+  if (!action) return;
+  const nameInput = root.querySelector<HTMLInputElement>("[data-pending-project-name]");
+  if (!activeProjectName && !nameInput) {
+    pendingSaveNeedsName = true;
+    render(root, renderedProjectState!);
+    root.querySelector<HTMLInputElement>("[data-pending-project-name]")?.focus();
+    return;
+  }
+  const name = nameInput?.value.trim();
+  if (pendingSaveNeedsName && !name) return;
+  await saveProject(name);
+  activeProjectName = name ?? activeProjectName;
+  projects = await listProjects();
+  pendingProjectAction = null;
+  pendingSaveNeedsName = false;
+  await performProjectAction(root, action);
+}
+
 function wireProjectControls(root: HTMLElement): void {
   root.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
     if (target.closest("[data-save-project]")) void saveCurrentProject(root);
+    if (target.closest("[data-new-project]")) requestProjectAction(root, { type: "new" });
     if (target.closest("[data-cancel-project-name]")) {
       isNamingProject = false;
       void fetchProjectState().then((state) => render(root, state));
     }
     const open = target.closest<HTMLButtonElement>("[data-open-project]");
-    if (open?.dataset.openProject) {
-      openProject(open.dataset.openProject).then((applied) => {
-        activeProjectName = open.dataset.openProject ?? null;
-        isNamingProject = false;
-        render(root, applied.state);
-      });
+    if (open?.dataset.openProject) requestProjectAction(root, { type: "open", name: open.dataset.openProject });
+    if (target.closest("[data-save-pending]")) void savePendingProjectAction(root);
+    if (target.closest("[data-discard-pending]") && pendingProjectAction) {
+      const action = pendingProjectAction;
+      pendingProjectAction = null;
+      pendingSaveNeedsName = false;
+      void performProjectAction(root, action);
+    }
+    if (target.closest("[data-cancel-pending]")) {
+      pendingProjectAction = null;
+      pendingSaveNeedsName = false;
+      if (renderedProjectState) render(root, renderedProjectState);
     }
   });
 
@@ -541,6 +616,11 @@ function wireRecordingControls(root: HTMLElement): void {
     if (target.closest("[data-record]")) {
       toggleRecording(root);
     }
+    if (target.closest("[data-confirm-recording-overwrite]")) void confirmRecordingOverwriteAction(root);
+    if (target.closest("[data-cancel-recording-overwrite]")) {
+      confirmRecordingOverwrite = false;
+      if (renderedProjectState) render(root, renderedProjectState);
+    }
     if (target.closest("[data-play-take]")) {
       void playTake(root);
     }
@@ -554,13 +634,24 @@ function wireRecordingControls(root: HTMLElement): void {
     if (blockButton) void playBlock(root, Number(blockButton.dataset.playBlock));
     const deleteButton = target.closest<HTMLButtonElement>("[data-delete-block]");
     if (deleteButton) void applyCommand({ type: "deleteBlock", payload: Number(deleteButton.dataset.deleteBlock) }).then((applied) => render(root, applied.state));
-  });
-
-  root.addEventListener("dblclick", (event) => {
-    const name = (event.target as HTMLElement).closest<HTMLElement>("[data-block-name]");
-    if (!name) return;
-    const value = window.prompt("Block name", name.textContent ?? "");
-    if (value !== null) void applyCommand({ type: "renameBlock", payload: { id: Number(name.dataset.blockName), name: value } }).then((applied) => render(root, applied.state));
+    const editName = target.closest<HTMLButtonElement>("[data-edit-block-name-button]");
+    if (editName?.dataset.editBlockNameButton) {
+      editingBlockId = Number(editName.dataset.editBlockNameButton);
+      if (renderedProjectState) render(root, renderedProjectState);
+    }
+    const saveName = target.closest<HTMLButtonElement>("[data-save-block-name]");
+    if (saveName?.dataset.saveBlockName) {
+      const id = Number(saveName.dataset.saveBlockName);
+      const input = root.querySelector<HTMLInputElement>(`[data-edit-block-name="${id}"]`);
+      if (input?.value.trim()) {
+        editingBlockId = null;
+        void applyCommand({ type: "renameBlock", payload: { id, name: input.value.trim() } }).then((applied) => render(root, applied.state));
+      }
+    }
+    if (target.closest("[data-cancel-block-name]")) {
+      editingBlockId = null;
+      if (renderedProjectState) render(root, renderedProjectState);
+    }
   });
 
   root.addEventListener("change", (event) => {
@@ -598,6 +689,7 @@ async function main(): Promise<void> {
   render(root, state);
   await refreshProjects(root);
   wireProjectControls(root);
+  await listen("confirm-close", () => requestProjectAction(root, { type: "quit" }));
   wireTempoControls(root);
   wireSoundControls(root);
   wireRecordingControls(root);
