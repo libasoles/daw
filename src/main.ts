@@ -17,8 +17,11 @@
 import {
   applyCommand,
   fetchProjectState,
+  listProjects,
   listMidiDevices,
+  openProject,
   playTestNote,
+  saveProject,
   selectMidiDevice,
   stopRecording,
   type MidiStatus,
@@ -42,6 +45,13 @@ const REVERB_MIN = 0;
 const REVERB_MAX = 100;
 const PIANO = 0;
 const ACCORDION = 1;
+let projects: string[] = [];
+let activeProjectName: string | null = null;
+let isNamingProject = false;
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>'"]/g, (character) => `&#${character.charCodeAt(0)};`);
+}
 
 function takeEndPulse(state: ProjectState): number {
   return state.take?.raw_notes.reduce((end, note) => Math.max(end, note.end_pulse), 0) ?? 0;
@@ -63,12 +73,29 @@ function takeGrid(state: ProjectState): string {
 
 function render(root: HTMLElement, state: ProjectState): void {
   root.innerHTML = /* html */ `
-    <section class="placeholder">
+    <section class="placeholder" data-tauri-drag-region>
       ${mark}
       <h1 class="placeholder__name">daw</h1>
       <p class="placeholder__tagline">
         Record takes, keep the good ones, arrange them on a timeline.
       </p>
+      <section class="project-controls" aria-label="Projects">
+        <div class="project-controls__actions">
+          <button type="button" data-save-project ${state.is_dirty ? "" : "disabled"}>Save</button>
+          <span class="project-controls__status">${state.is_dirty ? "Unsaved changes" : "All changes saved"}</span>
+        </div>
+        ${isNamingProject ? /* html */ `
+          <form class="project-controls__name" data-project-name-form>
+            <label>Project name <input data-project-name required autocomplete="off" /></label>
+            <button type="submit">Save project</button>
+            <button type="button" data-cancel-project-name>Cancel</button>
+          </form>
+        ` : ""}
+        <div class="project-controls__list">
+          <span>Projects</span>
+          ${projects.length ? projects.map((name) => `<button type="button" data-open-project="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("") : "<span class=\"project-controls__empty\">No saved projects yet</span>"}
+        </div>
+      </section>
       <div class="tempo" role="group" aria-label="Tempo">
         <button class="tempo__step" type="button" data-tempo-step="-1" aria-label="Decrease tempo">&minus;</button>
         <label class="tempo__readout">
@@ -303,6 +330,59 @@ async function redo(root: HTMLElement): Promise<void> {
   render(root, applied.state);
 }
 
+async function refreshProjects(root: HTMLElement): Promise<void> {
+  projects = await listProjects();
+  const state = await fetchProjectState();
+  render(root, state);
+}
+
+async function saveCurrentProject(root: HTMLElement, name?: string): Promise<void> {
+  if (!activeProjectName && !name) {
+    isNamingProject = true;
+    render(root, await fetchProjectState());
+    root.querySelector<HTMLInputElement>("[data-project-name]")?.focus();
+    return;
+  }
+  const state = await saveProject(name);
+  activeProjectName = name ?? activeProjectName;
+  isNamingProject = false;
+  projects = await listProjects();
+  render(root, state);
+}
+
+function wireProjectControls(root: HTMLElement): void {
+  root.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("[data-save-project]")) void saveCurrentProject(root);
+    if (target.closest("[data-cancel-project-name]")) {
+      isNamingProject = false;
+      void fetchProjectState().then((state) => render(root, state));
+    }
+    const open = target.closest<HTMLButtonElement>("[data-open-project]");
+    if (open?.dataset.openProject) {
+      openProject(open.dataset.openProject).then((applied) => {
+        activeProjectName = open.dataset.openProject ?? null;
+        isNamingProject = false;
+        render(root, applied.state);
+      });
+    }
+  });
+
+  root.addEventListener("submit", (event) => {
+    const form = event.target as HTMLElement;
+    if (!form.matches("[data-project-name-form]")) return;
+    event.preventDefault();
+    const input = root.querySelector<HTMLInputElement>("[data-project-name]");
+    if (input?.value.trim()) void saveCurrentProject(root, input.value.trim());
+  });
+
+  window.addEventListener("keydown", (event) => {
+    if (!event.metaKey || event.key.toLowerCase() !== "s") return;
+    event.preventDefault();
+    void saveCurrentProject(root);
+  });
+}
+
 function wireTempoControls(root: HTMLElement): void {
   root.addEventListener("click", (event) => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
@@ -513,6 +593,8 @@ async function main(): Promise<void> {
 
   const state = await fetchProjectState();
   render(root, state);
+  await refreshProjects(root);
+  wireProjectControls(root);
   wireTempoControls(root);
   wireSoundControls(root);
   wireRecordingControls(root);

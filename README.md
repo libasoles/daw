@@ -77,9 +77,10 @@ that pushing the seam this high is what makes leaving them alone defensible.
 `daw-core` defines the `Synth` port (`note_on`/`note_off`/`render`, instruments
 named by an opaque id) and is tested against a spy fake — see
 `core/tests/synth_port.rs`. The real implementation, `src-tauri`'s `RustySynth`,
-is backed by [`rustysynth`](https://crates.io/crates/rustysynth) and a bundled
-General MIDI SoundFont (`src-tauri/assets/soundfonts/TimGM6mb.sf2`; license and
-source in that directory's `NOTICE.md`).
+is backed by [`rustysynth`](https://crates.io/crates/rustysynth) and the full
+bundled GeneralUser GS 2.0.3 General MIDI/GS SoundFont
+(`src-tauri/assets/soundfonts/GeneralUser-GS.sf2`; licence, source and engine
+compatibility note in that directory's `NOTICE.md`).
 
 Audio output is split across two threads because `cpal`'s render callback runs
 on a real-time thread where blocking and allocation are forbidden, and neither

@@ -22,10 +22,10 @@ use rustysynth::{SoundFont, SoundFontError, Synthesizer, SynthesizerError, Synth
 /// Tauri bundle resource at runtime, so it is guaranteed present in release
 /// builds without a separate resource-path lookup — the acceptance criterion
 /// this satisfies is "a piano SoundFont is bundled with the application and
-/// available in release builds." The file is kept deliberately small
-/// (~6 MB, see the NOTICE) because bundle size is called out as a real
-/// constraint in the spec.
-const SOUND_FONT_BYTES: &[u8] = include_bytes!("../../assets/soundfonts/TimGM6mb.sf2");
+/// available in release builds." GeneralUser GS is a complete GM/GS bank
+/// (~31 MB), intentionally chosen over the former small TimGM bank; see the
+/// NOTICE for the fixed upstream version, licence, and compatibility caveat.
+const SOUND_FONT_BYTES: &[u8] = include_bytes!("../../assets/soundfonts/GeneralUser-GS.sf2");
 
 /// The two instruments exposed by the initial global selector. These remain
 /// opaque at the `Synth` port; adding another one is a mapping/data change

@@ -609,6 +609,7 @@ dependencies = [
  "rtrb",
  "rustysynth",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
 ]

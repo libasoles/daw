@@ -56,9 +56,12 @@ missing device. The core performs no I/O.
 requests into sound: `note_on`, `note_off`, `render`. Instruments are named
 by an opaque `InstrumentId`, never by an enum baked into the trait, so a
 third instrument is a data change, not a trait change. The real
-implementation (`src-tauri`'s `RustySynth`) is backed by `rustysynth` and a
-bundled SoundFont; tests use a spy that records which notes it was asked to
-sound and at which pulse.
+implementation (`src-tauri`'s `RustySynth`) is backed by `rustysynth` and the
+bundled GeneralUser GS 2.0.3 SoundFont; tests use a spy that records which
+notes it was asked to sound and at which pulse. GeneralUser GS is the canonical
+bundled bank: do not substitute a smaller bank merely to reduce the bundle.
+Its advanced SoundFont modulators make full-fidelity rendering a requirement
+for any future synth-engine change; see the asset NOTICE and issue #1.
 
 **The synth thread** — the non-real-time OS thread (`src-tauri`'s `audio`
 module) that owns the real `Synth` and does the actual rendering. It exists

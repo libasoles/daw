@@ -111,6 +111,7 @@ fn a_command_sent_from_the_frontend_as_json_deserialises_correctly() {
 fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
     let applied = Applied {
         state: ProjectState {
+            is_dirty: false,
             bpm: 140,
             time_signature: (4, 4),
             instrument: 1,
@@ -130,6 +131,7 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
         serde_json::to_value(applied).unwrap(),
         serde_json::json!({
             "state": {
+                "is_dirty": false,
                 "bpm": 140,
                 "time_signature": [4, 4],
                 "instrument": 1,

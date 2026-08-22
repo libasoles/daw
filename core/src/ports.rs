@@ -5,8 +5,8 @@
 //! below exists so integration tests can exercise the same contract without
 //! a keyboard or an operating system MIDI service.
 
-use std::fmt;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::thread;
 use std::time::{Duration, Instant};
 

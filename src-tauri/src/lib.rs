@@ -10,6 +10,7 @@
 
 mod audio;
 mod midi;
+mod project_storage;
 mod recording;
 
 use std::sync::Mutex;
@@ -17,8 +18,11 @@ use std::thread;
 use std::time::Duration;
 
 use audio::{AudioEngine, ScheduledEvent};
-use daw_core::{pulse_elapsed_time, Applied, Command, DawCore, Effect, ProjectState, Take};
+use daw_core::{
+    ports::Storage, pulse_elapsed_time, Applied, Command, DawCore, Effect, ProjectState, Take,
+};
 use midi::{load_selected_device, spawn_reconnector, MidiInputHandle, MidiStatus};
+use project_storage::FileStorage;
 use recording::RecordingHandle;
 use tauri::{AppHandle, Manager, State};
 
@@ -34,6 +38,9 @@ const DEBUG_NOTE_DURATION: Duration = Duration::from_millis(500);
 /// spec calls for reporting that rather than crashing, so the app keeps
 /// running with sound simply unavailable.
 struct AudioEngineHandle(Mutex<Option<AudioEngine>>);
+
+struct ProjectStorage(Mutex<FileStorage>);
+struct CurrentProjectName(Mutex<Option<String>>);
 
 /// Lists native MIDI inputs and the live connection state for the picker.
 #[tauri::command]
@@ -140,11 +147,7 @@ fn play_take_schedule(app: &AppHandle, take: &Take, bpm: u16) {
             ]
         })
         .collect();
-    let last_pulse = notes
-        .iter()
-        .map(|note| note.end_pulse)
-        .max()
-        .unwrap_or(0);
+    let last_pulse = notes.iter().map(|note| note.end_pulse).max().unwrap_or(0);
     let total_duration = pulse_elapsed_time(last_pulse, bpm).unwrap_or(Duration::ZERO);
 
     let started = {
@@ -191,6 +194,74 @@ fn project_state(core: State<Mutex<DawCore>>) -> ProjectState {
     core.state().clone()
 }
 
+/// Writes the current document under its existing name, or the supplied name
+/// on its first save. This stays entirely inside the app-data directory; no
+/// native file picker is involved.
+#[tauri::command]
+fn save_project(app: AppHandle, requested_name: Option<String>) -> Result<ProjectState, String> {
+    let name = {
+        let current = app.state::<CurrentProjectName>();
+        let current = current.0.lock().expect("project name mutex poisoned");
+        requested_name.or_else(|| current.clone())
+    }
+    .ok_or_else(|| "a project name is required for the first save".to_string())?;
+
+    let document = {
+        let core = app.state::<Mutex<DawCore>>();
+        let core = core.lock().expect("DawCore mutex poisoned");
+        serde_json::to_string(&core.project_document())
+            .map_err(|error| format!("could not encode project: {error}"))?
+    };
+
+    {
+        let storage = app.state::<ProjectStorage>();
+        storage
+            .0
+            .lock()
+            .expect("project storage mutex poisoned")
+            .save(&name, document)?;
+    }
+
+    let state = {
+        let core = app.state::<Mutex<DawCore>>();
+        let mut core = core.lock().expect("DawCore mutex poisoned");
+        core.apply(Command::ProjectSaved).state
+    };
+    *app.state::<CurrentProjectName>()
+        .0
+        .lock()
+        .expect("project name mutex poisoned") = Some(name);
+    Ok(state)
+}
+
+#[tauri::command]
+fn list_projects(app: AppHandle) -> Result<Vec<String>, String> {
+    app.state::<ProjectStorage>()
+        .0
+        .lock()
+        .expect("project storage mutex poisoned")
+        .list()
+}
+
+#[tauri::command]
+fn open_project(app: AppHandle, name: String) -> Result<Applied, String> {
+    let document = app
+        .state::<ProjectStorage>()
+        .0
+        .lock()
+        .expect("project storage mutex poisoned")
+        .load(&name)?
+        .ok_or_else(|| format!("project '{name}' was not found"))?;
+    let project = serde_json::from_str(&document)
+        .map_err(|error| format!("could not read project '{name}': {error}"))?;
+    let applied = dispatch(&app, Command::OpenProject(project));
+    *app.state::<CurrentProjectName>()
+        .0
+        .lock()
+        .expect("project name mutex poisoned") = Some(name);
+    Ok(applied)
+}
+
 /// Sounds a single fixed note for manual/test verification, since neither
 /// MIDI input (#6) nor the instrument dropdown (#5) exist yet to trigger one
 /// another way. Turns note-on into note-off after a fixed hold, on a plain
@@ -234,6 +305,9 @@ pub fn run() {
             // threads and DawCore is neither Sync nor meant to be shared
             // without one.
             app.manage(Mutex::new(DawCore::new()));
+            let app_data_dir = app.path().app_data_dir()?;
+            app.manage(ProjectStorage(Mutex::new(FileStorage::new(app_data_dir))));
+            app.manage(CurrentProjectName(Mutex::new(None)));
 
             // A missing output device (or a corrupt bundled SoundFont) must
             // not crash the app — it is reported here and `play_test_note`
@@ -277,6 +351,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             apply_command,
             project_state,
+            save_project,
+            list_projects,
+            open_project,
             play_test_note,
             stop_recording,
             list_midi_devices,

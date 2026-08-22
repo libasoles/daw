@@ -114,6 +114,48 @@ body {
   text-wrap: balance;
 }
 
+/* --- Projects (issue #13): app-owned names, never a native file picker. -- */
+
+.project-controls {
+  display: grid;
+  gap: var(--space-1);
+  width: min(100%, 34rem);
+  padding: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  text-align: left;
+}
+
+.project-controls__actions,
+.project-controls__name,
+.project-controls__list {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.project-controls button,
+.project-controls input {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-base);
+  color: var(--ink);
+  font: inherit;
+}
+
+.project-controls button:disabled {
+  color: var(--ink-faint);
+}
+
+.project-controls__status,
+.project-controls__empty {
+  color: var(--ink-dim);
+  font-size: var(--text-xs);
+}
+
 /* --- Tempo control (issue #3): proves the command seam end to end. ------ */
 
 .tempo {

@@ -3,6 +3,7 @@
 # Tooling artifacts (vendored skills pack, installer-managed)
 .claude/
 .agents/
+.codex-worktrees/
 skills-lock.json
 
 # Rust

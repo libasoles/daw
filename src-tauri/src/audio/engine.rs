@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use daw_core::{
-    is_bar_accent, PULSES_PER_BEAT,
+    is_bar_accent,
     ports::{InstrumentId, Synth},
+    PULSES_PER_BEAT,
 };
 use rtrb::RingBuffer;
 
@@ -362,8 +363,7 @@ fn spawn_synth_thread(
                     // below, just anchored at the schedule's own start frame
                     // instead of the stream's.
                     let elapsed_frames = rendered_frames - active.started_at_frame;
-                    let pulse = elapsed_frames
-                        .saturating_mul(u64::from(bpm) * PULSES_PER_BEAT)
+                    let pulse = elapsed_frames.saturating_mul(u64::from(bpm) * PULSES_PER_BEAT)
                         / (u64::from(sample_rate) * 60);
                     while active
                         .events
@@ -389,10 +389,10 @@ fn spawn_synth_thread(
                     // This is the inverse of `daw_core::pulse_elapsed_time`:
                     // elapsed rendered frames determine the current pulse.
                     // It runs here, never in the real-time callback.
-                    let pulse = rendered_frames
-                        .saturating_mul(u64::from(bpm) * PULSES_PER_BEAT)
+                    let pulse = rendered_frames.saturating_mul(u64::from(bpm) * PULSES_PER_BEAT)
                         / (u64::from(sample_rate) * 60);
-                    if pulse.is_multiple_of(PULSES_PER_BEAT) && last_metronome_pulse != Some(pulse) {
+                    if pulse.is_multiple_of(PULSES_PER_BEAT) && last_metronome_pulse != Some(pulse)
+                    {
                         last_metronome_pulse = Some(pulse);
                         click_frames_remaining =
                             usize::try_from(sample_rate / 125).unwrap_or(1).max(1);

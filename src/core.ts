@@ -34,6 +34,7 @@ export interface Block {
 export type Quantisation = "off" | "whole" | "half" | "quarter" | "eighth";
 
 export interface ProjectState {
+  is_dirty: boolean;
   bpm: number;
   time_signature: [number, number];
   instrument: number;
@@ -90,6 +91,19 @@ export function applyCommand(command: Command): Promise<Applied> {
 /** The project state as it stands right now, to render on first load. */
 export function fetchProjectState(): Promise<ProjectState> {
   return invoke<ProjectState>("project_state");
+}
+
+/** Saves through the shell's app-data storage, never a system file dialog. */
+export function saveProject(requestedName?: string): Promise<ProjectState> {
+  return invoke<ProjectState>("save_project", { requestedName });
+}
+
+export function listProjects(): Promise<string[]> {
+  return invoke<string[]>("list_projects");
+}
+
+export function openProject(name: string): Promise<Applied> {
+  return invoke<Applied>("open_project", { name });
 }
 
 /**

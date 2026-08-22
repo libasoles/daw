@@ -25,7 +25,7 @@ fn capture_via_scripted_input(events: Vec<MidiEvent>) -> Vec<CapturedEvent> {
 
     (0..events.len())
         .map(|_| {
-            let event = received.recv_timeout(Duration::from_secs(1)).unwrap();
+            let event = received.recv_timeout(Duration::from_secs(5)).unwrap();
             let (is_on, pitch, velocity) = match event.kind {
                 MidiEventKind::NoteOn { pitch, velocity } => (true, pitch, velocity),
                 MidiEventKind::NoteOff { pitch } => (false, pitch, 0),

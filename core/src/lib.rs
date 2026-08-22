@@ -38,6 +38,10 @@ use ports::InstrumentId;
 /// deriving it costs nothing — the shape doesn't change either way.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectState {
+    /// Whether this project differs from the most recent manual save. This is
+    /// runtime state for the shell, never part of a project document.
+    #[serde(default, skip_deserializing)]
+    pub is_dirty: bool,
     /// The global pulse, in beats per minute.
     pub bpm: u16,
     /// Beats per bar and the beat unit, e.g. `(3, 4)`.
@@ -248,6 +252,7 @@ pub const PULSES_PER_BEAT: u64 = 2;
 impl Default for ProjectState {
     fn default() -> Self {
         Self {
+            is_dirty: false,
             bpm: 120,
             time_signature: (3, 4),
             instrument: 0,
@@ -275,6 +280,12 @@ pub enum Command {
     /// wholesale and clears the undo/redo history, the same capability a
     /// later "switch projects" ticket will reuse.
     NewProject,
+    /// Replaces the current project with a document the shell read through
+    /// its storage port. Opening never enters undo history.
+    OpenProject(ProjectState),
+    /// Records that the shell successfully wrote the current document. This
+    /// is not undoable: it changes the save baseline, not musical content.
+    ProjectSaved,
     /// Sets the global tempo in beats per minute.
     SetBpm(u16),
     /// Sets the project's time signature (beats per bar, beat unit).
@@ -401,11 +412,25 @@ pub struct Applied {
 }
 
 /// The in-memory state machine every user gesture is funnelled through.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DawCore {
     state: ProjectState,
+    saved_state: Option<ProjectState>,
     undo_log: VecDeque<LoggedCommand>,
     redo_log: Vec<LoggedCommand>,
+}
+
+impl Default for DawCore {
+    fn default() -> Self {
+        let mut core = Self {
+            state: ProjectState::default(),
+            saved_state: None,
+            undo_log: VecDeque::new(),
+            redo_log: Vec::new(),
+        };
+        core.sync_dirty_state();
+        core
+    }
 }
 
 impl DawCore {
@@ -419,13 +444,33 @@ impl DawCore {
         &self.state
     }
 
+    /// Returns the durable document for the current project. Session-only
+    /// recording and playback flags are deliberately left out.
+    pub fn project_document(&self) -> ProjectState {
+        Self::document_state(&self.state)
+    }
+
     /// The single entry point into the core: a command goes in, the new
     /// project state and any effects come out. Performs no I/O.
     pub fn apply(&mut self, command: Command) -> Applied {
         let effects = match command {
             Command::NewProject => {
                 self.state = ProjectState::default();
+                self.saved_state = None;
                 self.clear_history();
+                Vec::new()
+            }
+            Command::OpenProject(mut state) => {
+                state.is_recording = false;
+                state.is_playing = false;
+                state.is_dirty = false;
+                self.state = state.clone();
+                self.saved_state = Some(state);
+                self.clear_history();
+                Vec::new()
+            }
+            Command::ProjectSaved => {
+                self.saved_state = Some(Self::document_state(&self.state));
                 Vec::new()
             }
             Command::Undo => self.undo(),
@@ -595,6 +640,8 @@ impl DawCore {
             }
         };
 
+        self.sync_dirty_state();
+
         Applied {
             state: self.state.clone(),
             effects,
@@ -704,9 +751,30 @@ impl DawCore {
             | Command::PlayBlock(_)
             | Command::PlaybackFinished
             | Command::NewProject
+            | Command::OpenProject(_)
+            | Command::ProjectSaved
             | Command::Undo
             | Command::Redo => {}
         }
+    }
+
+    /// Strips session-only fields before comparing or persisting a project.
+    /// Recording, playback and dirty state describe the running application,
+    /// not musical work that should reappear after reopening a document.
+    fn document_state(state: &ProjectState) -> ProjectState {
+        let mut document = state.clone();
+        document.is_dirty = false;
+        document.is_recording = false;
+        document.is_playing = false;
+        document
+    }
+
+    fn sync_dirty_state(&mut self) {
+        let document = Self::document_state(&self.state);
+        self.state.is_dirty = self
+            .saved_state
+            .as_ref()
+            .is_none_or(|saved| document != *saved);
     }
 }
 
