@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+mod midi;
 pub mod ports;
 
 use ports::InstrumentId;
@@ -559,6 +560,14 @@ pub enum Command {
     /// same `is_playing` flag — refused (no effect) while anything is
     /// already playing, and a no-op if the timeline holds nothing yet.
     PlayTimeline,
+    /// Exports the timeline as a Standard MIDI File (issue #24): the exact
+    /// same flattened note stream `PlayTimeline` plays, plus tempo and time
+    /// signature, encoded as bytes for the shell to write wherever the user
+    /// chooses — daw-core performs no file I/O of its own. Not undoable;
+    /// export is not a musical edit. Reports [`Effect::NothingToExport`]
+    /// rather than [`Effect::ExportedMidi`] if the timeline holds no
+    /// placements, so the shell never writes an empty file.
+    ExportMidi,
     RenameBlock {
         id: u64,
         name: String,
@@ -646,6 +655,17 @@ pub enum Effect {
     /// this into real audio and, once it has finished sounding, apply
     /// `PlaybackFinished`.
     PlaySchedule(Take),
+    /// `ExportMidi` was applied against an empty timeline. The shell should
+    /// tell the user there is nothing to export rather than opening a save
+    /// dialog or writing a file.
+    NothingToExport,
+    /// `ExportMidi` succeeded: a complete Standard MIDI File, ready to write
+    /// exactly as given. The shell should open a native save dialog and
+    /// write these bytes wherever the user chooses. A named field, not a
+    /// bare newtype, because `#[serde(tag = "type")]`'s internal tagging
+    /// can't represent a variant whose payload serialises as a JSON array
+    /// rather than an object.
+    ExportedMidi { bytes: Vec<u8> },
 }
 
 /// The number of applied commands retained in the undo log. The spec (#1,
@@ -960,25 +980,22 @@ impl DawCore {
                     Vec::new()
                 } else {
                     self.state.is_playing = true;
-                    let notes = self
-                        .state
-                        .placements
-                        .iter()
-                        .flat_map(|placement| {
-                            placement.notes.iter().map(move |note| RecordedNote {
-                                pitch: note.pitch,
-                                velocity: note.velocity,
-                                start_pulse: placement.start_pulse + note.start_pulse,
-                                end_pulse: placement.start_pulse + note.end_pulse,
-                            })
-                        })
-                        .collect();
+                    let notes = midi::flattened_notes(&self.state);
                     vec![Effect::PlaySchedule(Take::from_raw_notes(notes))]
                 }
             }
             Command::PlaybackFinished => {
                 self.state.is_playing = false;
                 Vec::new()
+            }
+            Command::ExportMidi => {
+                if self.state.placements.is_empty() {
+                    vec![Effect::NothingToExport]
+                } else {
+                    vec![Effect::ExportedMidi {
+                        bytes: midi::encode(&self.state),
+                    }]
+                }
             }
             Command::AddPlacement { block_id, track } => {
                 if let Some(block) = self.state.blocks.iter().find(|block| block.id == block_id) {
@@ -1339,6 +1356,7 @@ impl DawCore {
             | Command::DeletePlacement(_)
             | Command::SetPlacementGap { .. }
             | Command::DeleteBlock { .. }
+            | Command::ExportMidi
             | Command::PlayTimeline
             | Command::PlaybackFinished
             | Command::NewProject { .. }

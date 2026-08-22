@@ -455,7 +455,8 @@ body {
   color: var(--ink-dim);
 }
 
-.timeline__play {
+.timeline__play,
+.timeline__export {
   font: inherit;
   font-size: var(--text-xs);
   padding: var(--space-1) var(--space-2);
@@ -465,12 +466,14 @@ body {
   color: var(--ink);
 }
 
-.timeline__play:hover:not(:disabled) {
+.timeline__play:hover:not(:disabled),
+.timeline__export:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
 }
 
-.timeline__play:disabled {
+.timeline__play:disabled,
+.timeline__export:disabled {
   color: var(--ink-faint);
 }
 

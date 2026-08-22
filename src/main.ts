@@ -17,6 +17,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   applyCommand,
+  exportMidi,
   fetchProjectState,
   fetchRecoverySnapshot,
   listProjects,
@@ -354,6 +355,7 @@ function render(root: HTMLElement, state: ProjectState): void {
           >
             ${state.is_playing && timelinePlaybackActive ? "Stop (Space)" : "Play timeline (Space)"}
           </button>
+          <button class="timeline__export" type="button" data-export-midi>Export .mid</button>
           <label class="pulse-toggle">
             <input type="checkbox" data-loop-enabled${state.loop_enabled ? " checked" : ""} />
             <span>Loop</span>
@@ -616,6 +618,20 @@ async function stopCurrentPlayback(root: HTMLElement): Promise<void> {
   render(root, applied.state);
 }
 
+/**
+ * Exports the timeline as a `.mid` file (issue #24). Doesn't touch
+ * `ProjectState` at all — export isn't a musical edit — so there is
+ * nothing to render afterwards; the only thing worth telling the user is
+ * that an empty timeline had nothing to export, since a native save
+ * dialog never even opened for them to notice that on their own.
+ */
+async function exportTimelineAsMidi(): Promise<void> {
+  const outcome = await exportMidi();
+  if (outcome.status === "nothingToExport") {
+    window.alert("The timeline is empty — there is nothing to export.");
+  }
+}
+
 async function undo(root: HTMLElement): Promise<void> {
   const applied = await applyCommand({ type: "undo" });
   render(root, applied.state);
@@ -823,6 +839,10 @@ function wireTimelineControls(root: HTMLElement): void {
       } else {
         void playTimeline(root);
       }
+    }
+
+    if (target.closest("[data-export-midi]")) {
+      void exportTimelineAsMidi();
     }
   });
 

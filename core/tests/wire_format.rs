@@ -91,6 +91,10 @@ fn commands_serialise_as_an_adjacently_tagged_object() {
         serde_json::json!({ "type": "playTimeline" })
     );
     assert_eq!(
+        serde_json::to_value(Command::ExportMidi).unwrap(),
+        serde_json::json!({ "type": "exportMidi" })
+    );
+    assert_eq!(
         serde_json::to_value(Command::PlaybackFinished).unwrap(),
         serde_json::json!({ "type": "playbackFinished" })
     );
@@ -241,5 +245,16 @@ fn effects_that_carry_a_take_serialise_the_take_inline() {
     assert_eq!(
         serde_json::to_value(Effect::ConfirmDeleteBlockInUse { uses: 3 }).unwrap(),
         serde_json::json!({ "type": "confirmDeleteBlockInUse", "uses": 3 })
+    );
+    assert_eq!(
+        serde_json::to_value(Effect::NothingToExport).unwrap(),
+        serde_json::json!({ "type": "nothingToExport" })
+    );
+    assert_eq!(
+        serde_json::to_value(Effect::ExportedMidi {
+            bytes: vec![1, 2, 3]
+        })
+        .unwrap(),
+        serde_json::json!({ "type": "exportedMidi", "bytes": [1, 2, 3] })
     );
 }

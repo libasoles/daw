@@ -180,6 +180,25 @@ export function stopPlayback(): Promise<Applied> {
   return invoke<Applied>("stop_playback");
 }
 
+/** What happened when {@link exportMidi} was called. */
+export type ExportOutcome =
+  | { status: "exported" }
+  | { status: "nothingToExport" }
+  | { status: "cancelled" };
+
+/**
+ * Exports the timeline as a `.mid` file (issue #24). The shell asks
+ * `daw-core` for the encoded bytes reflecting exactly what playback would
+ * sound — trims, quantisation, deliberate gaps and tempo/time signature
+ * all included — then opens a native "Save As" dialog and writes them
+ * wherever the user chooses. This can't be a regular `applyCommand` call:
+ * the native save dialog and the file write are shell-only capabilities
+ * the webview has no access to.
+ */
+export function exportMidi(): Promise<ExportOutcome> {
+  return invoke<ExportOutcome>("export_midi");
+}
+
 /**
  * Sounds a single fixed note through the bundled SoundFont, for manual
  * verification that audio reaches the speakers (issue #4). There is no MIDI

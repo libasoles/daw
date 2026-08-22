@@ -26,6 +26,7 @@ use midi::{load_selected_device, spawn_reconnector, MidiInputHandle, MidiStatus}
 use project_storage::FileStorage;
 use recording::RecordingHandle;
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 /// The fixed note the debug trigger sounds. There is no MIDI input yet
 /// (issue #6), so this remains the only way to prove sound reaches the
@@ -270,6 +271,54 @@ fn stop_playback(app: AppHandle) -> Applied {
         }
     }
     dispatch(&app, Command::PlaybackFinished)
+}
+
+/// What the webview should tell the user once `export_midi` returns.
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+enum ExportOutcome {
+    /// The file was written to the path the user chose.
+    Exported,
+    /// The core reported the timeline was empty; no dialog was ever shown.
+    NothingToExport,
+    /// The core had bytes ready, but the user closed the save dialog
+    /// without choosing a location.
+    Cancelled,
+}
+
+/// Exports the timeline as a `.mid` file (issue #24): asks `daw-core` for
+/// the encoded bytes, then — the one step the webview cannot do itself —
+/// opens a native "Save As" dialog and writes them wherever the user
+/// chooses. Unlike `save_project`, this deliberately does go through a
+/// native file picker: a `.mid` export is a piece taken *elsewhere*, not
+/// part of the app's own managed project storage.
+#[tauri::command]
+fn export_midi(app: AppHandle) -> Result<ExportOutcome, String> {
+    let applied = dispatch(&app, Command::ExportMidi);
+    for effect in &applied.effects {
+        match effect {
+            Effect::NothingToExport => return Ok(ExportOutcome::NothingToExport),
+            Effect::ExportedMidi { bytes } => {
+                let Some(chosen) = app
+                    .dialog()
+                    .file()
+                    .add_filter("MIDI", &["mid"])
+                    .set_file_name("timeline.mid")
+                    .blocking_save_file()
+                else {
+                    return Ok(ExportOutcome::Cancelled);
+                };
+                let path = chosen
+                    .into_path()
+                    .map_err(|error| format!("invalid save location: {error}"))?;
+                std::fs::write(&path, bytes)
+                    .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+                return Ok(ExportOutcome::Exported);
+            }
+            _ => {}
+        }
+    }
+    unreachable!("Command::ExportMidi always reports NothingToExport or ExportedMidi")
 }
 
 /// Finishes recording: turns the shell's buffered MIDI capture into a
@@ -547,6 +596,7 @@ fn play_test_note(app: AppHandle) -> Result<(), String> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // The single source of truth for the whole application, behind a
             // mutex because Tauri command handlers run on the webview's IPC
@@ -625,6 +675,7 @@ pub fn run() {
             play_test_note,
             stop_recording,
             stop_playback,
+            export_midi,
             list_midi_devices,
             select_midi_device
         ])
