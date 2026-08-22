@@ -369,13 +369,13 @@ fn save_project(app: AppHandle, requested_name: Option<String>) -> Result<Projec
     else {
         unreachable!("the match above only accepts save effects")
     };
-    let document = serde_json::to_string(&document)
+    let encoded_document = serde_json::to_string(&document)
         .map_err(|error| format!("could not encode project: {error}"))?;
 
     {
         let storage = app.state::<ProjectStorage>();
         let mut storage = storage.0.lock().expect("project storage mutex poisoned");
-        storage.save(&name, document)?;
+        storage.save(&name, encoded_document)?;
         // A manual save is now the newest record of this work, so the
         // crash-recovery snapshot (issue #15) — meant only to cover the gap
         // between saves — no longer has anything to add.
@@ -385,7 +385,7 @@ fn save_project(app: AppHandle, requested_name: Option<String>) -> Result<Projec
     let state = {
         let core = app.state::<Mutex<DawCore>>();
         let mut core = core.lock().expect("DawCore mutex poisoned");
-        core.apply(Command::ProjectSaved).state
+        core.apply(Command::ProjectSaved(document)).state
     };
     *app.state::<CurrentProjectName>()
         .0
