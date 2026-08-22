@@ -218,6 +218,7 @@ function render(root: HTMLElement, state: ProjectState): void {
       </p>
       <section class="project-controls" aria-label="Projects">
         <div class="project-controls__actions">
+          <button type="button" data-new-project>New project</button>
           <button type="button" data-save-project ${state.is_dirty ? "" : "disabled"}>Save</button>
           <button type="button" data-new-project>New project</button>
           <span class="project-controls__status">${state.is_dirty ? "Unsaved changes" : "All changes saved"}</span>
