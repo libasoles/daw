@@ -10,3 +10,7 @@ repository.workspace = true
 description = "Pure musical core for the daw: commands in, project state and effects out."
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

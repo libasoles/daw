@@ -52,6 +52,17 @@ missing device. The core performs no I/O.
 **Port** — a trait the core depends on and the shell implements: `Synth`,
 `MidiInput`, `AudioOutput`, `Storage`. Real in production, faked in tests.
 
+**Undo log** — how undo is implemented: a bounded ring of at least 50 applied
+commands, each paired with its inverse. `Undo` applies the most recent inverse
+and moves that entry to a redo log; `Redo` reapplies it and moves it back.
+`Undo` and `Redo` are never themselves logged. Applying a fresh command after
+an undo discards the redo log — there is no branching timeline. `Undo`/`Redo`
+against an empty log are no-ops that report an `Effect` (`NothingToUndo` /
+`NothingToRedo`) rather than erroring, so the shell can, say, disable the undo
+button. The log is a sequence of commands, not state snapshots, and it can be
+cleared outright (`DawCore::clear_history`) — a later "switch projects" ticket
+does this, per the spec's "undo history cleared when I switch projects".
+
 ## Shape of the system
 
 ```

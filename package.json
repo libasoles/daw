@@ -11,6 +11,9 @@
     "frontend:build": "tsc --noEmit && vite build",
     "tauri": "tauri"
   },
+  "dependencies": {
+    "@tauri-apps/api": "^2"
+  },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "typescript": "^7.0.2",
