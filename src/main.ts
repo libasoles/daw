@@ -154,6 +154,7 @@ function render(root: HTMLElement, state: ProjectState): void {
                 Play take
               </button>
               <span class="take-summary">${state.take.notes.length} note${state.take.notes.length === 1 ? "" : "s"}</span>
+              <button type="button" data-add-to-library>Add to library</button>
               ${takeGrid(state)}
               <div class="take-edit-controls" aria-label="Take editing">
                 <label>Quantise <select data-quantisation aria-label="Quantisation">
@@ -165,6 +166,10 @@ function render(root: HTMLElement, state: ProjectState): void {
             : /* html */ `<span class="take-summary take-summary--empty">no take yet</span>`
         }
       </div>
+      <aside class="library" aria-label="Library">
+        <h2>Library</h2>
+        ${state.blocks.map((block, index) => `<div class="library-block" style="--block-color: ${block.color}">${block.name}<button type="button" data-play-block="${index}"${state.is_playing ? " disabled" : ""}>Play</button></div>`).join("") || "<span class=\"take-summary take-summary--empty\">no blocks yet</span>"}
+      </aside>
       <div class="midi-control" aria-label="MIDI input">
         <label class="sound-control">
           <span class="sound-control__label">MIDI input</span>
@@ -275,6 +280,16 @@ async function applyTakeQuantisation(root: HTMLElement): Promise<void> {
   const select = root.querySelector<HTMLSelectElement>("[data-quantisation]");
   if (!select) return;
   const applied = await applyCommand({ type: "setTakeQuantisation", payload: select.value as Quantisation });
+  render(root, applied.state);
+}
+
+async function addTakeToLibrary(root: HTMLElement): Promise<void> {
+  const applied = await applyCommand({ type: "addTakeToLibrary" });
+  render(root, applied.state);
+}
+
+async function playBlock(root: HTMLElement, index: number): Promise<void> {
+  const applied = await applyCommand({ type: "playBlock", payload: index });
   render(root, applied.state);
 }
 
@@ -449,6 +464,11 @@ function wireRecordingControls(root: HTMLElement): void {
     if (target.closest("[data-apply-quantisation]")) {
       void applyTakeQuantisation(root);
     }
+    if (target.closest("[data-add-to-library]")) {
+      void addTakeToLibrary(root);
+    }
+    const blockButton = target.closest<HTMLButtonElement>("[data-play-block]");
+    if (blockButton) void playBlock(root, Number(blockButton.dataset.playBlock));
   });
 
   root.addEventListener("change", (event) => {

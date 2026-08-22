@@ -23,6 +23,13 @@ export interface Take {
   quantisation: Quantisation;
 }
 
+export interface Block {
+  name: string;
+  color: string;
+  instrument: number;
+  notes: RecordedNote[];
+}
+
 export type Quantisation = "off" | "whole" | "half" | "quarter" | "eighth";
 
 export interface ProjectState {
@@ -33,6 +40,7 @@ export interface ProjectState {
   metronome_enabled: boolean;
   count_in_enabled: boolean;
   take: Take | null;
+  blocks: Block[];
   is_recording: boolean;
   is_playing: boolean;
 }
@@ -51,6 +59,8 @@ export type Command =
   | { type: "startRecording"; payload: { force: boolean } }
   | { type: "setTakeTrim"; payload: { start_pulse: number; end_pulse: number } }
   | { type: "setTakeQuantisation"; payload: Quantisation }
+  | { type: "addTakeToLibrary" }
+  | { type: "playBlock"; payload: number }
   | { type: "playTake" }
   | { type: "undo" }
   | { type: "redo" };

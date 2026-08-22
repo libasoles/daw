@@ -118,6 +118,7 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
             metronome_enabled: true,
             count_in_enabled: false,
             take: None,
+            blocks: Vec::new(),
             is_recording: false,
             is_playing: false,
         },
@@ -135,6 +136,7 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
                 "metronome_enabled": true,
                 "count_in_enabled": false,
                 "take": null,
+                "blocks": [],
                 "is_recording": false,
                 "is_playing": false
             },

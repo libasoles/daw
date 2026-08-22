@@ -381,6 +381,10 @@ body {
   font: inherit;
 }
 
+.library { display: grid; gap: var(--space-1); }
+.library h2 { margin: 0; font-size: var(--text-sm); color: var(--ink-dim); }
+.library-block { border-left: 4px solid var(--block-color); padding: var(--space-1) var(--space-2); background: var(--surface-raised); }
+
 /* --- Native MIDI input picker (issue #6). ------------------------------ */
 
 .midi-control {

@@ -65,6 +65,8 @@ pub struct ProjectState {
     /// The recording area's one take, if anything has been recorded yet.
     /// `None` until the first `StopRecording`.
     pub take: Option<Take>,
+    /// Frozen blocks held by the library.
+    pub blocks: Vec<Block>,
     /// Whether the shell is currently capturing live MIDI into a take.
     /// A performance/session flag, not a musical edit — see
     /// [`Command::StartRecording`].
@@ -84,6 +86,18 @@ pub struct RecordedNote {
     pub start_pulse: u64,
     pub end_pulse: u64,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Block {
+    pub name: String,
+    pub color: String,
+    pub instrument: InstrumentId,
+    pub notes: Vec<RecordedNote>,
+}
+
+const BLOCK_COLORS: [&str; 6] = [
+    "#f87171", "#fbbf24", "#34d399", "#60a5fa", "#a78bfa", "#f472b6",
+];
 
 /// A recording in the recording area (CONTEXT.md's "Take"): the raw notes
 /// exactly as played. There is at most one at a time, and it is never
@@ -239,6 +253,7 @@ impl Default for ProjectState {
             metronome_enabled: false,
             count_in_enabled: true,
             take: None,
+            blocks: Vec::new(),
             is_recording: false,
             is_playing: false,
         }
@@ -296,6 +311,10 @@ pub enum Command {
     /// undo inverse, when there was no take to revert to. Undoable: reverts
     /// to whatever take (if any) was there before.
     StopRecording(Option<Take>),
+    AddTakeToLibrary,
+    InsertBlock(Block),
+    RemoveBlock(Block),
+    PlayBlock(usize),
     SetTakeTrim(Trim),
     SetTakeQuantisation(Quantisation),
     /// Starts isolated playback of the current take, if there is one. Not
@@ -463,6 +482,30 @@ impl DawCore {
                 self.log(Command::StopRecording(take), inverse);
                 Vec::new()
             }
+            Command::AddTakeToLibrary => {
+                if let Some(take) = self.state.take.as_ref() {
+                    let block = Block {
+                        name: format!("Take {}", self.state.blocks.len() + 1),
+                        color: BLOCK_COLORS[self.state.blocks.len() % BLOCK_COLORS.len()].into(),
+                        instrument: self.state.instrument,
+                        notes: take.notes(),
+                    };
+                    self.state.blocks.push(block.clone());
+                    self.log(
+                        Command::InsertBlock(block.clone()),
+                        Command::RemoveBlock(block),
+                    );
+                }
+                Vec::new()
+            }
+            Command::InsertBlock(block) => {
+                self.state.blocks.push(block);
+                Vec::new()
+            }
+            Command::RemoveBlock(block) => {
+                self.state.blocks.retain(|candidate| candidate != &block);
+                Vec::new()
+            }
             Command::SetTakeTrim(trim) => {
                 if let Some(take) = self.state.take.as_mut() {
                     let inverse = Command::SetTakeTrim(take.trim);
@@ -479,10 +522,24 @@ impl DawCore {
                 }
                 Vec::new()
             }
-            Command::PlayTake => match self.state.take.clone() {
+            Command::PlayTake => match self.state.take.clone().filter(|_| !self.state.is_playing) {
                 Some(take) => {
                     self.state.is_playing = true;
                     vec![Effect::PlaySchedule(take)]
+                }
+                None => Vec::new(),
+            },
+            Command::PlayBlock(index) => match self
+                .state
+                .blocks
+                .get(index)
+                .filter(|_| !self.state.is_playing)
+            {
+                Some(block) => {
+                    self.state.is_playing = true;
+                    vec![Effect::PlaySchedule(Take::from_raw_notes(
+                        block.notes.clone(),
+                    ))]
                 }
                 None => Vec::new(),
             },
@@ -565,6 +622,11 @@ impl DawCore {
             } => state.time_signature = (*beats_per_bar, *beat_unit),
             Command::SetInstrument(instrument) => state.instrument = *instrument,
             Command::StopRecording(take) => state.take = take.clone(),
+            Command::AddTakeToLibrary => {}
+            Command::InsertBlock(block) => state.blocks.push(block.clone()),
+            Command::RemoveBlock(block) => {
+                state.blocks.retain(|candidate| candidate != block);
+            }
             Command::SetTakeTrim(trim) => {
                 if let Some(take) = state.take.as_mut() {
                     take.set_trim(*trim);
@@ -582,6 +644,7 @@ impl DawCore {
             | Command::SetCountInEnabled(_)
             | Command::StartRecording { .. }
             | Command::PlayTake
+            | Command::PlayBlock(_)
             | Command::PlaybackFinished
             | Command::NewProject
             | Command::Undo
