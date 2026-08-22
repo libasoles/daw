@@ -81,6 +81,10 @@ let activeProjectName: string | null = null;
 let isNamingProject = false;
 let currentState: ProjectState | null = null;
 let editingBlockId: number | null = null;
+/** The placement selected on the timeline (issue #21), if any — a view
+ * concern only, like `timelineZoom`, never part of `ProjectState`. `Delete`
+ * acts on whichever placement this names. */
+let selectedPlacementId: number | null = null;
 
 /**
  * A "new project" / "switch project" / "quit" the user asked for while there
@@ -162,7 +166,8 @@ function timelinePlacements(state: ProjectState): string {
       const length = placement.notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
       const left = placement.start_pulse * pxPerPulse;
       const width = Math.max(length * pxPerPulse, 2);
-      return `<div class="timeline-placement" style="--placement-color: ${placement.color}; left: ${left}px; width: ${width}px;" data-placement="${placement.id}" draggable="true" data-drag-placement="${placement.id}">${escapeHtml(placement.name)}</div>`;
+      const selected = placement.id === selectedPlacementId;
+      return `<div class="timeline-placement${selected ? " timeline-placement--selected" : ""}" style="--placement-color: ${placement.color}; left: ${left}px; width: ${width}px;" data-placement="${placement.id}" draggable="true" data-drag-placement="${placement.id}" aria-selected="${selected}">${escapeHtml(placement.name)}</div>`;
     })
     .join("");
 }
@@ -926,6 +931,51 @@ function wireBlockPlacementDragAndDrop(root: HTMLElement): void {
   });
 }
 
+/**
+ * Selecting a placement on the timeline and removing it with `Delete`
+ * (issue #21). Selection is a view concern, like `timelineZoom` — clicking a
+ * placement selects it, clicking anywhere else on the timeline clears the
+ * selection, and `Delete`/`Backspace` sends `Command::DeletePlacement` for
+ * whichever placement is currently selected.
+ */
+function wireTimelineSelection(root: HTMLElement): void {
+  root.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    const placement = target.closest<HTMLElement>("[data-placement]");
+    if (placement?.dataset.placement) {
+      selectedPlacementId = Number(placement.dataset.placement);
+      render(root, currentState!);
+      return;
+    }
+    if (target.closest("[data-timeline-drop]") && selectedPlacementId !== null) {
+      selectedPlacementId = null;
+      render(root, currentState!);
+    }
+  });
+
+  window.addEventListener("keydown", (event) => {
+    if (event.key !== "Delete" && event.key !== "Backspace") return;
+    if (selectedPlacementId === null) return;
+    const active = document.activeElement;
+    // Never hijack Delete/Backspace while the user is typing, exactly like
+    // the Space-bar transport shortcut above.
+    if (
+      active instanceof HTMLInputElement ||
+      active instanceof HTMLSelectElement ||
+      active instanceof HTMLTextAreaElement ||
+      active instanceof HTMLButtonElement
+    ) {
+      return;
+    }
+    event.preventDefault();
+    const id = selectedPlacementId;
+    selectedPlacementId = null;
+    void applyCommand({ type: "deletePlacement", payload: id }).then((applied) =>
+      render(root, applied.state),
+    );
+  });
+}
+
 function wireTempoControls(root: HTMLElement): void {
   root.addEventListener("click", (event) => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
@@ -1196,6 +1246,7 @@ async function main(): Promise<void> {
   wireQuitWarning(root);
   wireTimelineControls(root);
   wireBlockPlacementDragAndDrop(root);
+  wireTimelineSelection(root);
   await refreshMidiDevices(root);
   window.setInterval(() => void refreshMidiDevices(root), 1_000);
 }

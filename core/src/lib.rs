@@ -454,6 +454,11 @@ pub enum Command {
         id: u64,
         new_index: usize,
     },
+    /// Removes the placement with `id` from the timeline and closes the gap
+    /// behind it: the rest of its track ripples earlier so everything stays
+    /// flush (issue #21). A no-op if no placement has `id`. Undoable via the
+    /// same [`Command::SetTrackPlacements`] snapshot pair as insert/reorder.
+    DeletePlacement(u64),
     /// Replaces every placement on `track` wholesale. The undo/redo
     /// primitive behind `InsertPlacementAt`/`ReorderPlacement`: rippling a
     /// track moves more than one placement at once, so a single before/
@@ -969,6 +974,43 @@ impl DawCore {
                 }
                 Vec::new()
             }
+            Command::DeletePlacement(id) => {
+                if let Some(track) = self
+                    .state
+                    .placements
+                    .iter()
+                    .find(|placement| placement.id == id)
+                    .map(|placement| placement.track)
+                {
+                    let before: Vec<Placement> = self
+                        .state
+                        .placements
+                        .iter()
+                        .filter(|placement| placement.track == track)
+                        .cloned()
+                        .collect();
+                    let mut ordered = before.clone();
+                    ordered.sort_by_key(|placement| placement.start_pulse);
+                    ordered.retain(|placement| placement.id != id);
+                    reflow(&mut ordered);
+
+                    self.state
+                        .placements
+                        .retain(|placement| placement.track != track);
+                    self.state.placements.extend(ordered.clone());
+                    self.log(
+                        Command::SetTrackPlacements {
+                            track,
+                            placements: ordered,
+                        },
+                        Command::SetTrackPlacements {
+                            track,
+                            placements: before,
+                        },
+                    );
+                }
+                Vec::new()
+            }
             Command::SetTrackPlacements { track, placements } => {
                 self.state
                     .placements
@@ -1101,6 +1143,7 @@ impl DawCore {
             | Command::AddPlacement { .. }
             | Command::InsertPlacementAt { .. }
             | Command::ReorderPlacement { .. }
+            | Command::DeletePlacement(_)
             | Command::PlayTimeline
             | Command::PlaybackFinished
             | Command::NewProject { .. }

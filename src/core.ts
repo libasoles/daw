@@ -86,6 +86,7 @@ export type Command =
       payload: { block_id: number; track: number; index: number };
     }
   | { type: "reorderPlacement"; payload: { id: number; new_index: number } }
+  | { type: "deletePlacement"; payload: number }
   | { type: "renameBlock"; payload: { id: number; name: string } }
   | { type: "recolourBlock"; payload: { id: number; color: string } }
   | { type: "deleteBlock"; payload: number }

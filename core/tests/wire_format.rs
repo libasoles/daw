@@ -123,6 +123,10 @@ fn commands_serialise_as_an_adjacently_tagged_object() {
         serde_json::json!({ "type": "reorderPlacement", "payload": { "id": 1, "new_index": 2 } })
     );
     assert_eq!(
+        serde_json::to_value(Command::DeletePlacement(1)).unwrap(),
+        serde_json::json!({ "type": "deletePlacement", "payload": 1 })
+    );
+    assert_eq!(
         serde_json::to_value(Command::Undo).unwrap(),
         serde_json::json!({ "type": "undo" })
     );
