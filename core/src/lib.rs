@@ -19,7 +19,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -117,9 +117,8 @@ const BLOCK_COLORS: [&str; 6] = [
 /// A block placed on the timeline (CONTEXT.md's "Placement"): an
 /// **independent copy** of the block's notes, name, colour and instrument,
 /// not a reference. Blocks are immutable, so a copy behaves identically to a
-/// reference during playback, and the copy is what lets deleting a block
-/// from the library later (#23) leave existing placements exactly as they
-/// sound today rather than silently altering the arrangement.
+/// reference during playback: renaming or recolouring a block (#12) never
+/// retroactively changes a placement already made from it.
 ///
 /// `track` and `start_pulse` are stored explicitly — rather than, say, the
 /// placement's index in an ordered list standing in for its position — so
@@ -128,6 +127,15 @@ const BLOCK_COLORS: [&str; 6] = [
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Placement {
     pub id: u64,
+    /// The block this placement was copied from, kept only so deleting that
+    /// block (#23) can find every placement it produced — never consulted
+    /// to re-read the block's *current* name, colour or notes, which would
+    /// defeat the whole point of an independent copy. `#[serde(default)]`
+    /// so a document saved before this field existed still opens; such a
+    /// placement simply never matches a real block and so never
+    /// participates in a future delete-in-use cascade.
+    #[serde(default)]
+    pub block_id: u64,
     pub track: u32,
     pub start_pulse: u64,
     pub name: String,
@@ -176,6 +184,58 @@ fn reflow(order: &mut [Placement]) {
         placement.start_pulse = cursor;
         cursor += placement.length();
     }
+}
+
+/// Removes `block_id`'s block and every placement copied from it (issue
+/// #23), reflowing only the tracks that actually lost a placement so
+/// deliberate gaps elsewhere are left exactly as they were. Shared between
+/// `DeleteBlock`'s own handler (which needs to know what it touched, to log
+/// as an undo inverse) and `RemoveBlockAndPlacements`'s replay on redo,
+/// which discards the return value.
+///
+/// Returns the removed block together with a *complete* pre-removal
+/// snapshot of every placement on every track that lost one — not just the
+/// removed placements themselves. A track's surviving placements ripple
+/// earlier to close the gap, so undoing this has to put the whole track
+/// back, exactly as `Command::SetTrackPlacements` already does for insert,
+/// reorder and delete; restoring only the removed items would leave the
+/// survivors stranded at their post-ripple positions. Returns `None` if no
+/// block has `block_id`.
+fn remove_block_and_its_placements(
+    state: &mut ProjectState,
+    block_id: u64,
+) -> Option<(Block, Vec<Placement>)> {
+    let index = state.blocks.iter().position(|block| block.id == block_id)?;
+    let block = state.blocks.remove(index);
+
+    let affected_tracks: BTreeSet<u32> = state
+        .placements
+        .iter()
+        .filter(|placement| placement.block_id == block_id)
+        .map(|placement| placement.track)
+        .collect();
+
+    let mut before_snapshot = Vec::new();
+    for track in affected_tracks {
+        let mut ordered: Vec<Placement> = state
+            .placements
+            .iter()
+            .filter(|placement| placement.track == track)
+            .cloned()
+            .collect();
+        before_snapshot.extend(ordered.iter().cloned());
+
+        ordered.retain(|placement| placement.block_id != block_id);
+        ordered.sort_by_key(|placement| placement.start_pulse);
+        reflow(&mut ordered);
+
+        state
+            .placements
+            .retain(|placement| placement.track != track);
+        state.placements.extend(ordered);
+    }
+
+    Some((block, before_snapshot))
 }
 
 /// A recording in the recording area (CONTEXT.md's "Take"): the raw notes
@@ -507,7 +567,33 @@ pub enum Command {
         id: u64,
         color: String,
     },
-    DeleteBlock(u64),
+    /// Deletes the block with `id` from the library (issue #23) — the
+    /// application's one destructive path across the two areas. A block
+    /// with no placements is deleted outright. A block used in the
+    /// timeline reports [`Effect::ConfirmDeleteBlockInUse`] and leaves
+    /// everything untouched unless `force` is `true`, in which case the
+    /// block and every placement copied from it are removed together,
+    /// closing the gap each removal leaves on its track — deliberate gaps
+    /// elsewhere are untouched, exactly as insert/reorder/delete already
+    /// preserve them. The whole thing is a single undo step.
+    DeleteBlock {
+        id: u64,
+        force: bool,
+    },
+    /// Removes the block with `id` and every placement copied from it,
+    /// closing the resulting gaps (issue #23). The redo half of
+    /// `DeleteBlock`'s undo pair — deterministic replay of the same
+    /// deletion, not itself logged.
+    RemoveBlockAndPlacements(u64),
+    /// Restores a block and a complete pre-removal snapshot of every
+    /// placement on every track `DeleteBlock` touched — not just the
+    /// removed placements, but the survivors too, since they rippled to
+    /// close the gap and need putting back at their exact previous
+    /// positions as well. The undo half of `DeleteBlock`'s pair.
+    RestoreBlockAndPlacements {
+        block: Block,
+        placements: Vec<Placement>,
+    },
     SetTakeTrim(Trim),
     SetTakeQuantisation(Quantisation),
     /// Starts isolated playback of the current take, if there is one. Not
@@ -551,6 +637,11 @@ pub enum Effect {
     /// offer to save, discard or cancel, then resend the same command with
     /// `force: true` if the user chooses to save or discard.
     ConfirmDiscardUnsavedChanges,
+    /// `DeleteBlock { force: false, .. }` was applied against a block used
+    /// by `uses` placements on the timeline. The shell should ask the user
+    /// to confirm, stating how many placements will be removed, then
+    /// resend with `force: true` if they agree.
+    ConfirmDeleteBlockInUse { uses: usize },
     /// `PlayTake` was applied with a take present: the shell should turn
     /// this into real audio and, once it has finished sounding, apply
     /// `PlaybackFinished`.
@@ -792,14 +883,39 @@ impl DawCore {
                 }
                 Vec::new()
             }
-            Command::DeleteBlock(id) => {
-                if let Some(index) = self.state.blocks.iter().position(|block| block.id == id) {
-                    let block = self.state.blocks.remove(index);
-                    self.log(
-                        Command::RemoveBlock(block.clone()),
-                        Command::InsertBlock(block),
-                    );
+            Command::DeleteBlock { id, force } => {
+                let uses = self
+                    .state
+                    .placements
+                    .iter()
+                    .filter(|placement| placement.block_id == id)
+                    .count();
+                if uses > 0 && !force {
+                    vec![Effect::ConfirmDeleteBlockInUse { uses }]
+                } else {
+                    if let Some((block, placements)) =
+                        remove_block_and_its_placements(&mut self.state, id)
+                    {
+                        self.log(
+                            Command::RemoveBlockAndPlacements(id),
+                            Command::RestoreBlockAndPlacements { block, placements },
+                        );
+                    }
+                    Vec::new()
                 }
+            }
+            Command::RemoveBlockAndPlacements(block_id) => {
+                remove_block_and_its_placements(&mut self.state, block_id);
+                Vec::new()
+            }
+            Command::RestoreBlockAndPlacements { block, placements } => {
+                self.state.blocks.push(block);
+                let restored_tracks: BTreeSet<u32> =
+                    placements.iter().map(|placement| placement.track).collect();
+                self.state
+                    .placements
+                    .retain(|placement| !restored_tracks.contains(&placement.track));
+                self.state.placements.extend(placements);
                 Vec::new()
             }
             Command::SetTakeTrim(trim) => {
@@ -881,6 +997,7 @@ impl DawCore {
                         .unwrap_or(0);
                     let placement = Placement {
                         id: self.state.next_placement_id,
+                        block_id,
                         track,
                         start_pulse,
                         name: block.name.clone(),
@@ -926,6 +1043,7 @@ impl DawCore {
 
                     let new_placement = Placement {
                         id: self.state.next_placement_id,
+                        block_id,
                         track,
                         start_pulse: 0,
                         name: block.name.clone(),
@@ -1174,7 +1292,18 @@ impl DawCore {
                     block.color = color.clone();
                 }
             }
-            Command::DeleteBlock(_) => {}
+            Command::RemoveBlockAndPlacements(block_id) => {
+                remove_block_and_its_placements(state, *block_id);
+            }
+            Command::RestoreBlockAndPlacements { block, placements } => {
+                state.blocks.push(block.clone());
+                let restored_tracks: BTreeSet<u32> =
+                    placements.iter().map(|placement| placement.track).collect();
+                state
+                    .placements
+                    .retain(|placement| !restored_tracks.contains(&placement.track));
+                state.placements.extend(placements.iter().cloned());
+            }
             Command::InsertPlacement(placement) => state.placements.push(placement.clone()),
             Command::RemovePlacement(placement) => {
                 state.placements.retain(|candidate| candidate != placement);
@@ -1209,6 +1338,7 @@ impl DawCore {
             | Command::ReorderPlacement { .. }
             | Command::DeletePlacement(_)
             | Command::SetPlacementGap { .. }
+            | Command::DeleteBlock { .. }
             | Command::PlayTimeline
             | Command::PlaybackFinished
             | Command::NewProject { .. }

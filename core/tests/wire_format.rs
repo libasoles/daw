@@ -135,6 +135,14 @@ fn commands_serialise_as_an_adjacently_tagged_object() {
         serde_json::json!({ "type": "setPlacementGap", "payload": { "id": 1, "gap_before": 3 } })
     );
     assert_eq!(
+        serde_json::to_value(Command::DeleteBlock {
+            id: 1,
+            force: false
+        })
+        .unwrap(),
+        serde_json::json!({ "type": "deleteBlock", "payload": { "id": 1, "force": false } })
+    );
+    assert_eq!(
         serde_json::to_value(Command::Undo).unwrap(),
         serde_json::json!({ "type": "undo" })
     );
@@ -229,5 +237,9 @@ fn effects_that_carry_a_take_serialise_the_take_inline() {
     assert_eq!(
         serde_json::to_value(Effect::ConfirmDiscardUnsavedChanges).unwrap(),
         serde_json::json!({ "type": "confirmDiscardUnsavedChanges" })
+    );
+    assert_eq!(
+        serde_json::to_value(Effect::ConfirmDeleteBlockInUse { uses: 3 }).unwrap(),
+        serde_json::json!({ "type": "confirmDeleteBlockInUse", "uses": 3 })
     );
 }

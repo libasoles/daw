@@ -28,6 +28,7 @@ import {
   selectMidiDevice,
   stopPlayback,
   stopRecording,
+  type Effect,
   type MidiStatus,
   type ProjectState,
   type Quantisation,
@@ -498,6 +499,34 @@ async function startRecording(root: HTMLElement): Promise<void> {
 
 async function endRecording(root: HTMLElement): Promise<void> {
   const applied = await stopRecording();
+  render(root, applied.state);
+}
+
+/**
+ * Deletes a library block (issue #23) — the application's one destructive
+ * path across the two areas. If the block is used on the timeline, the core
+ * reports `confirmDeleteBlockInUse` with how many placements would be
+ * removed and leaves everything untouched; this asks the user to confirm,
+ * stating that count, then resends with `force: true` if they agree.
+ * Cancelling changes nothing at all.
+ */
+async function deleteBlock(root: HTMLElement, id: number): Promise<void> {
+  const applied = await applyCommand({ type: "deleteBlock", payload: { id, force: false } });
+  const confirmation = applied.effects.find(
+    (effect): effect is Extract<Effect, { type: "confirmDeleteBlockInUse" }> =>
+      effect.type === "confirmDeleteBlockInUse",
+  );
+  if (confirmation) {
+    render(root, applied.state);
+    const uses = confirmation.uses;
+    const noun = uses === 1 ? "placement" : "placements";
+    if (!window.confirm(`This block is used in ${uses} ${noun}. Delete it and remove them?`)) {
+      return;
+    }
+    const forced = await applyCommand({ type: "deleteBlock", payload: { id, force: true } });
+    render(root, forced.state);
+    return;
+  }
   render(root, applied.state);
 }
 
@@ -1199,7 +1228,7 @@ function wireRecordingControls(root: HTMLElement): void {
     const blockButton = target.closest<HTMLButtonElement>("[data-play-block]");
     if (blockButton) void playBlock(root, Number(blockButton.dataset.playBlock));
     const deleteButton = target.closest<HTMLButtonElement>("[data-delete-block]");
-    if (deleteButton) void applyCommand({ type: "deleteBlock", payload: Number(deleteButton.dataset.deleteBlock) }).then((applied) => render(root, applied.state));
+    if (deleteButton) void deleteBlock(root, Number(deleteButton.dataset.deleteBlock));
   });
 
   root.addEventListener("dblclick", (event) => {

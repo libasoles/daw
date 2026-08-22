@@ -56,7 +56,10 @@ fn renaming_recolouring_and_deleting_a_block_are_undoable() {
         id: block.id,
         color: "#60a5fa".into(),
     });
-    let deleted = core.apply(Command::DeleteBlock(block.id));
+    let deleted = core.apply(Command::DeleteBlock {
+        id: block.id,
+        force: false,
+    });
     assert!(deleted.state.blocks.is_empty());
 
     let restored = core.apply(Command::Undo);
@@ -147,7 +150,10 @@ fn deleting_a_block_does_not_cause_the_next_block_to_reuse_its_name_or_colour() 
     assert_eq!(core.state().blocks[2].name, "Take 3");
 
     let second_id = core.state().blocks[1].id;
-    core.apply(Command::DeleteBlock(second_id));
+    core.apply(Command::DeleteBlock {
+        id: second_id,
+        force: false,
+    });
     assert_eq!(core.state().blocks.len(), 2);
 
     record_and_freeze(&mut core, 67);

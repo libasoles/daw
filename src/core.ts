@@ -35,6 +35,9 @@ export interface Block {
  * block's notes/name/colour/instrument, never a reference. */
 export interface Placement {
   id: number;
+  /** The block this placement was copied from (issue #23), kept only so
+   * deleting that block can find every placement it produced. */
+  block_id: number;
   track: number;
   start_pulse: number;
   name: string;
@@ -94,7 +97,7 @@ export type Command =
   | { type: "setPlacementGap"; payload: { id: number; gap_before: number } }
   | { type: "renameBlock"; payload: { id: number; name: string } }
   | { type: "recolourBlock"; payload: { id: number; color: string } }
-  | { type: "deleteBlock"; payload: number }
+  | { type: "deleteBlock"; payload: { id: number; force: boolean } }
   | { type: "playTake" }
   | { type: "playTimeline" }
   | { type: "undo" }
@@ -106,6 +109,7 @@ export type Effect =
   | { type: "noMidiDeviceAvailable" }
   | { type: "confirmOverwriteRecording" }
   | { type: "confirmDiscardUnsavedChanges" }
+  | { type: "confirmDeleteBlockInUse"; uses: number }
   | ({ type: "playSchedule" } & Take);
 
 export interface Applied {
