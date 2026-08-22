@@ -863,10 +863,48 @@ function computeDropIndex(event: DragEvent, track: number): number {
 }
 
 /**
+ * The deliberate silence (issue #22) a `Cmd`-held drop at `event.clientX`
+ * asks for, ahead of whichever placement lands at `index`: the distance
+ * between the drop's pulse (snapped to the grid) and where that placement
+ * would land with no gap at all — flush after its new predecessor, or the
+ * very start of the track if it has none. Never negative; dropping earlier
+ * than flush just asks for no gap. `excludeId` leaves out the placement
+ * being dragged itself, when reordering, so it doesn't count as its own
+ * predecessor.
+ */
+function computeDropGap(
+  event: DragEvent,
+  track: number,
+  index: number,
+  excludeId: number | null,
+): number {
+  const trackEl = (event.target as HTMLElement).closest<HTMLElement>(".timeline__track");
+  if (!trackEl) return 0;
+  const pxPerPulse = TIMELINE_ZOOM_PX_PER_PULSE[timelineZoom];
+  const dropX = event.clientX - trackEl.getBoundingClientRect().left;
+  const dropPulse = Math.max(0, Math.round(dropX / pxPerPulse));
+
+  const ordered = (currentState?.placements ?? [])
+    .filter((placement) => placement.track === track && placement.id !== excludeId)
+    .sort((a, b) => a.start_pulse - b.start_pulse);
+  const predecessor = ordered[index - 1];
+  const naturalPulse = predecessor
+    ? predecessor.start_pulse +
+      predecessor.notes.reduce((end, note) => Math.max(end, note.end_pulse), 0)
+    : 0;
+
+  return Math.max(0, dropPulse - naturalPulse);
+}
+
+/**
  * Dragging a block from the library onto the timeline inserts it (issue
  * #17 for a plain append, #20 for inserting between two placements, pushing
  * the remainder later); dragging an existing placement reorders it, with
- * the same push behaviour.
+ * the same push behaviour. Holding `Cmd` while dropping leaves a deliberate
+ * gap before the placement instead of butting it against its neighbour
+ * (issue #22), sent as a follow-up `setPlacementGap` once the insert or
+ * reorder itself lands — that also lets a `Cmd`-drop flush against a
+ * neighbour explicitly clear a gap the placement already had.
  */
 function wireBlockPlacementDragAndDrop(root: HTMLElement): void {
   root.addEventListener("dragstart", (event) => {
@@ -903,10 +941,20 @@ function wireBlockPlacementDragAndDrop(root: HTMLElement): void {
     const blockId = event.dataTransfer?.getData(DRAG_BLOCK_TYPE);
     if (blockId) {
       const index = computeDropIndex(event, track);
+      const gapBefore = event.metaKey ? computeDropGap(event, track, index, null) : null;
       void applyCommand({
         type: "insertPlacementAt",
         payload: { block_id: Number(blockId), track, index },
-      }).then((applied) => render(root, applied.state));
+      }).then((applied) => {
+        render(root, applied.state);
+        if (gapBefore === null) return;
+        // The command just created exactly one placement, so this is its id.
+        const insertedId = applied.state.next_placement_id - 1;
+        void applyCommand({
+          type: "setPlacementGap",
+          payload: { id: insertedId, gap_before: gapBefore },
+        }).then((withGap) => render(root, withGap.state));
+      });
       return;
     }
 
@@ -923,10 +971,18 @@ function wireBlockPlacementDragAndDrop(root: HTMLElement): void {
       // doesn't know that, so adjust for a drop past the placement's own
       // current position.
       if (currentIndex !== -1 && index > currentIndex) index -= 1;
+      const gapBefore = event.metaKey ? computeDropGap(event, track, index, id) : null;
       void applyCommand({
         type: "reorderPlacement",
         payload: { id, new_index: index },
-      }).then((applied) => render(root, applied.state));
+      }).then((applied) => {
+        render(root, applied.state);
+        if (gapBefore === null) return;
+        void applyCommand({
+          type: "setPlacementGap",
+          payload: { id, gap_before: gapBefore },
+        }).then((withGap) => render(root, withGap.state));
+      });
     }
   });
 }

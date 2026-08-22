@@ -41,6 +41,10 @@ export interface Placement {
   color: string;
   instrument: number;
   notes: RecordedNote[];
+  /** A deliberate silence, in pulses, held before this placement (issue
+   * #22), set by dragging with `Cmd` held. Stored on the placement itself
+   * so it survives insertions, reorders and deletions elsewhere. */
+  gap_before: number;
 }
 
 export type Quantisation = "off" | "whole" | "half" | "quarter" | "eighth";
@@ -87,6 +91,7 @@ export type Command =
     }
   | { type: "reorderPlacement"; payload: { id: number; new_index: number } }
   | { type: "deletePlacement"; payload: number }
+  | { type: "setPlacementGap"; payload: { id: number; gap_before: number } }
   | { type: "renameBlock"; payload: { id: number; name: string } }
   | { type: "recolourBlock"; payload: { id: number; color: string } }
   | { type: "deleteBlock"; payload: number }

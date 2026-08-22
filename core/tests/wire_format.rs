@@ -127,6 +127,14 @@ fn commands_serialise_as_an_adjacently_tagged_object() {
         serde_json::json!({ "type": "deletePlacement", "payload": 1 })
     );
     assert_eq!(
+        serde_json::to_value(Command::SetPlacementGap {
+            id: 1,
+            gap_before: 3
+        })
+        .unwrap(),
+        serde_json::json!({ "type": "setPlacementGap", "payload": { "id": 1, "gap_before": 3 } })
+    );
+    assert_eq!(
         serde_json::to_value(Command::Undo).unwrap(),
         serde_json::json!({ "type": "undo" })
     );

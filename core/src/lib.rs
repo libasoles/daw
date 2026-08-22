@@ -134,6 +134,14 @@ pub struct Placement {
     pub color: String,
     pub instrument: InstrumentId,
     pub notes: Vec<RecordedNote>,
+    /// A deliberate silence, in pulses, held before this placement (issue
+    /// #22). Stored on the placement that follows it, not inferred from
+    /// coordinates, so it survives ripple edits — inserting, reordering or
+    /// deleting placements elsewhere never touches this field.
+    /// `#[serde(default)]` so a document saved before this field existed
+    /// still opens, as a gap of zero.
+    #[serde(default)]
+    pub gap_before: u64,
 }
 
 impl Placement {
@@ -153,15 +161,18 @@ impl Placement {
 }
 
 /// Recomputes every placement's `start_pulse` in `order` sequentially from
-/// pulse 0, so they sit flush with no gaps and no overlap (CONTEXT.md's
-/// "Ripple") — the shared reflow step behind inserting-with-push and
-/// reordering (issue #20). `order` is every placement on one track, already
-/// arranged in the order they should end up in; contiguity and non-overlap
-/// hold afterward by construction, since each one starts exactly where the
-/// last one ended.
+/// pulse 0, honouring each placement's own `gap_before` (issue #22) — with
+/// every `gap_before` at zero they sit flush with no gaps and no overlap
+/// (CONTEXT.md's "Ripple"), the shared reflow step behind inserting-with-
+/// push, reordering (issue #20) and deleting (#21). `order` is every
+/// placement on one track, already arranged in the order they should end up
+/// in; each placement starts exactly `gap_before` pulses after the last one
+/// ended, so a deliberate gap set on one placement holds regardless of what
+/// moves elsewhere on the track.
 fn reflow(order: &mut [Placement]) {
     let mut cursor = 0u64;
     for placement in order.iter_mut() {
+        cursor += placement.gap_before;
         placement.start_pulse = cursor;
         cursor += placement.length();
     }
@@ -459,6 +470,17 @@ pub enum Command {
     /// flush (issue #21). A no-op if no placement has `id`. Undoable via the
     /// same [`Command::SetTrackPlacements`] snapshot pair as insert/reorder.
     DeletePlacement(u64),
+    /// Sets the deliberate silence held before the placement with `id`
+    /// (issue #22) — a rest written into the piece, snapped to the pulse
+    /// grid by the caller, stored on the placement itself so it survives
+    /// insertions, reorders and deletions elsewhere on the track. A no-op
+    /// if no placement has `id`. Undoable via the same
+    /// [`Command::SetTrackPlacements`] snapshot pair as insert/reorder/
+    /// delete.
+    SetPlacementGap {
+        id: u64,
+        gap_before: u64,
+    },
     /// Replaces every placement on `track` wholesale. The undo/redo
     /// primitive behind `InsertPlacementAt`/`ReorderPlacement`: rippling a
     /// track moves more than one placement at once, so a single before/
@@ -865,6 +887,7 @@ impl DawCore {
                         color: block.color.clone(),
                         instrument: block.instrument,
                         notes: block.notes.clone(),
+                        gap_before: 0,
                     };
                     self.state.placements.push(placement.clone());
                     self.state.next_placement_id += 1;
@@ -909,6 +932,7 @@ impl DawCore {
                         color: block.color.clone(),
                         instrument: block.instrument,
                         notes: block.notes.clone(),
+                        gap_before: 0,
                     };
                     self.state.next_placement_id += 1;
                     ordered.insert(index.min(ordered.len()), new_placement);
@@ -992,6 +1016,46 @@ impl DawCore {
                     let mut ordered = before.clone();
                     ordered.sort_by_key(|placement| placement.start_pulse);
                     ordered.retain(|placement| placement.id != id);
+                    reflow(&mut ordered);
+
+                    self.state
+                        .placements
+                        .retain(|placement| placement.track != track);
+                    self.state.placements.extend(ordered.clone());
+                    self.log(
+                        Command::SetTrackPlacements {
+                            track,
+                            placements: ordered,
+                        },
+                        Command::SetTrackPlacements {
+                            track,
+                            placements: before,
+                        },
+                    );
+                }
+                Vec::new()
+            }
+            Command::SetPlacementGap { id, gap_before } => {
+                if let Some(track) = self
+                    .state
+                    .placements
+                    .iter()
+                    .find(|placement| placement.id == id)
+                    .map(|placement| placement.track)
+                {
+                    let before: Vec<Placement> = self
+                        .state
+                        .placements
+                        .iter()
+                        .filter(|placement| placement.track == track)
+                        .cloned()
+                        .collect();
+                    let mut ordered = before.clone();
+                    ordered.sort_by_key(|placement| placement.start_pulse);
+                    if let Some(placement) = ordered.iter_mut().find(|placement| placement.id == id)
+                    {
+                        placement.gap_before = gap_before;
+                    }
                     reflow(&mut ordered);
 
                     self.state
@@ -1144,6 +1208,7 @@ impl DawCore {
             | Command::InsertPlacementAt { .. }
             | Command::ReorderPlacement { .. }
             | Command::DeletePlacement(_)
+            | Command::SetPlacementGap { .. }
             | Command::PlayTimeline
             | Command::PlaybackFinished
             | Command::NewProject { .. }
