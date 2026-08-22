@@ -435,6 +435,67 @@ body {
   padding: 0 var(--space-1);
 }
 
+/* --- The timeline (issue #16): a single track with a pulse grid, bar
+   accents, horizontal scroll and three fixed zoom levels. ---------------- */
+
+.timeline {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.timeline__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.timeline__header h2 {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-dim);
+}
+
+.timeline__zoom {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.timeline__zoom button {
+  font: inherit;
+  font-size: var(--text-xs);
+  padding: 0 var(--space-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--ink-dim);
+}
+
+.timeline__zoom button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.timeline__scroll {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.timeline-grid {
+  display: block;
+}
+
+.timeline-grid__line {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.timeline-grid__line--accent {
+  stroke: var(--ink-dim);
+  stroke-width: 1.5;
+}
+
 /* --- The app's one modal dialog (issue #14): warns before discarding
    unsaved work on a new project, a project switch, or quit. ------------- */
 

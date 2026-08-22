@@ -49,6 +49,32 @@ const REVERB_MIN = 0;
 const REVERB_MAX = 100;
 const PIANO = 0;
 const ACCORDION = 1;
+
+/** Mirrors `core/src/lib.rs`'s `PULSES_PER_BEAT`. Stored notes are pulse
+ * offsets, never beats or bars (CONTEXT.md's "Pulse"), so the timeline has
+ * to know this conversion itself to draw a bar-accented grid; there's no
+ * other source for it, since the core performs no rendering. */
+const PULSES_PER_BEAT = 2;
+
+/**
+ * How many bars the timeline draws. There's no placement (#17) or project
+ * "length" yet — a piece is just as long as its arrangement — so this is a
+ * generous fixed span, wide enough to prove horizontal scrolling (#16's own
+ * acceptance criterion) without needing that concept yet.
+ */
+const TIMELINE_BARS = 64;
+
+type TimelineZoom = "overview" | "normal" | "close";
+/** Three fixed zoom levels (#16): pixels of horizontal space per pulse.
+ * This is a view setting only — never sent to the core, never part of
+ * `ProjectState` — so it lives in this module-level variable, not a
+ * command payload. */
+const TIMELINE_ZOOM_PX_PER_PULSE: Record<TimelineZoom, number> = {
+  overview: 4,
+  normal: 12,
+  close: 28,
+};
+let timelineZoom: TimelineZoom = "normal";
 let projects: string[] = [];
 let activeProjectName: string | null = null;
 let isNamingProject = false;
@@ -92,6 +118,27 @@ function takeGrid(state: ProjectState): string {
     `<rect x="${note.start_pulse * 32}" y="${72 - note.pitch % 5 * 12}" width="${Math.max(2, (note.end_pulse - note.start_pulse) * 32)}" height="9" rx="2" />`,
   ).join("");
   return `<div class="take-editor"><svg viewBox="0 0 ${width} 88" aria-label="Take notes against the pulse grid"><g class="take-grid">${lines}</g><g class="take-notes">${notes}</g></svg><div class="take-trim-handles" aria-label="Trim handles"><input class="take-trim-handle take-trim-handle--start" type="range" data-trim-start min="0" max="${end}" step="1" value="${take.trim.start_pulse}" aria-label="Trim start" /><input class="take-trim-handle take-trim-handle--end" type="range" data-trim-end min="0" max="${end}" step="1" value="${take.trim.end_pulse}" aria-label="Trim end" /></div></div>`;
+}
+
+/**
+ * The timeline's pulse grid (issue #16): a line for every pulse, every
+ * `pulsesPerBar`-th line accented so a long arrangement stays readable
+ * without counting. The accent is purely visual — it comes from the time
+ * signature but constrains nothing about where a block can later be
+ * placed — and it never moves a grid line, only which lines are marked, so
+ * changing the time signature re-accents in place rather than rescaling
+ * anything drawn.
+ */
+function timelineGrid(state: ProjectState): string {
+  const pulsesPerBar = state.time_signature[0] * PULSES_PER_BEAT;
+  const totalPulses = TIMELINE_BARS * pulsesPerBar;
+  const pxPerPulse = TIMELINE_ZOOM_PX_PER_PULSE[timelineZoom];
+  const width = totalPulses * pxPerPulse;
+  const lines = Array.from({ length: totalPulses + 1 }, (_, pulse) => {
+    const accent = pulse % pulsesPerBar === 0;
+    return `<line class="timeline-grid__line${accent ? " timeline-grid__line--accent" : ""}" x1="${pulse * pxPerPulse}" y1="0" x2="${pulse * pxPerPulse}" y2="120" />`;
+  }).join("");
+  return `<svg class="timeline-grid" width="${width}" height="120" viewBox="0 0 ${width} 120" aria-label="Timeline pulse grid">${lines}</svg>`;
 }
 
 function render(root: HTMLElement, state: ProjectState): void {
@@ -226,6 +273,17 @@ function render(root: HTMLElement, state: ProjectState): void {
             : `<span data-block-name="${block.id}">${escapeHtml(block.name)}</span>`
         }<input data-block-color="${block.id}" type="color" value="${block.color}" /><button type="button" data-delete-block="${block.id}">Delete</button><button type="button" data-play-block="${index}"${state.is_playing ? " disabled" : ""}>Play</button></div>`).join("") || "<span class=\"take-summary take-summary--empty\">no blocks yet</span>"}
       </aside>
+      <section class="timeline" aria-label="Timeline">
+        <div class="timeline__header">
+          <h2>Timeline</h2>
+          <div class="timeline__zoom" role="group" aria-label="Timeline zoom">
+            <button type="button" data-timeline-zoom="overview" aria-pressed="${timelineZoom === "overview"}">Overview</button>
+            <button type="button" data-timeline-zoom="normal" aria-pressed="${timelineZoom === "normal"}">Normal</button>
+            <button type="button" data-timeline-zoom="close" aria-pressed="${timelineZoom === "close"}">Close</button>
+          </div>
+        </div>
+        <div class="timeline__scroll">${timelineGrid(state)}</div>
+      </section>
       <div class="midi-control" aria-label="MIDI input">
         <label class="sound-control">
           <span class="sound-control__label">MIDI input</span>
@@ -571,6 +629,20 @@ function wireQuitWarning(root: HTMLElement): void {
   });
 }
 
+/** Zoom is a view setting (#16), so this only ever re-renders locally —
+ * there is no command to send, and nothing about the change is worth the
+ * core knowing. */
+function wireTimelineControls(root: HTMLElement): void {
+  root.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
+      "[data-timeline-zoom]",
+    );
+    if (!button?.dataset.timelineZoom) return;
+    timelineZoom = button.dataset.timelineZoom as TimelineZoom;
+    render(root, currentState!);
+  });
+}
+
 function wireTempoControls(root: HTMLElement): void {
   root.addEventListener("click", (event) => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
@@ -839,6 +911,7 @@ async function main(): Promise<void> {
   wireMidiPicker(root);
   wireUndoRedoKeys(root);
   wireQuitWarning(root);
+  wireTimelineControls(root);
   await refreshMidiDevices(root);
   window.setInterval(() => void refreshMidiDevices(root), 1_000);
 }
