@@ -263,6 +263,70 @@ body {
   cursor: default;
 }
 
+/* --- Recording area (issue #8): one take, captured and played back. ---- */
+
+.recording-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.record-button {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  cursor: default;
+}
+
+.record-button:hover:not(:disabled) {
+  border-color: #f87171;
+  color: #f87171;
+}
+
+.record-button--active {
+  border-color: #f87171;
+  background: #f87171;
+  color: var(--surface-base);
+}
+
+.record-button:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
+
+.take-play {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  cursor: default;
+}
+
+.take-play:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.take-play:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
+
+.take-summary {
+  color: var(--ink-dim);
+  font-size: var(--text-xs);
+}
+
+.take-summary--empty {
+  color: var(--ink-faint);
+}
+
 /* --- Native MIDI input picker (issue #6). ------------------------------ */
 
 .midi-control {

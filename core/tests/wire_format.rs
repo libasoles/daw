@@ -3,7 +3,7 @@
 //! TypeScript. These tests pin that shape down so a change here is a visible,
 //! deliberate decision rather than a silent break of the frontend.
 
-use daw_core::{Applied, Command, Effect, ProjectState};
+use daw_core::{Applied, Command, Effect, ProjectState, RecordedNote, Take};
 
 #[test]
 fn commands_serialise_as_an_adjacently_tagged_object() {
@@ -43,6 +43,35 @@ fn commands_serialise_as_an_adjacently_tagged_object() {
         serde_json::json!({ "type": "setCountInEnabled", "payload": false })
     );
     assert_eq!(
+        serde_json::to_value(Command::StartRecording { force: false }).unwrap(),
+        serde_json::json!({ "type": "startRecording", "payload": { "force": false } })
+    );
+    assert_eq!(
+        serde_json::to_value(Command::StopRecording(Some(Take {
+            notes: vec![RecordedNote {
+                pitch: 60,
+                velocity: 100,
+                start_pulse: 0,
+                end_pulse: 4
+            }]
+        })))
+        .unwrap(),
+        serde_json::json!({
+            "type": "stopRecording",
+            "payload": {
+                "notes": [{ "pitch": 60, "velocity": 100, "start_pulse": 0, "end_pulse": 4 }]
+            }
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(Command::PlayTake).unwrap(),
+        serde_json::json!({ "type": "playTake" })
+    );
+    assert_eq!(
+        serde_json::to_value(Command::PlaybackFinished).unwrap(),
+        serde_json::json!({ "type": "playbackFinished" })
+    );
+    assert_eq!(
         serde_json::to_value(Command::Undo).unwrap(),
         serde_json::json!({ "type": "undo" })
     );
@@ -73,6 +102,9 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
             reverb: 75,
             metronome_enabled: true,
             count_in_enabled: false,
+            take: None,
+            is_recording: false,
+            is_playing: false,
         },
         effects: vec![Effect::NoMidiDeviceAvailable],
     };
@@ -86,9 +118,36 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
                 "instrument": 1,
                 "reverb": 75,
                 "metronome_enabled": true,
-                "count_in_enabled": false
+                "count_in_enabled": false,
+                "take": null,
+                "is_recording": false,
+                "is_playing": false
             },
             "effects": [{ "type": "noMidiDeviceAvailable" }]
         })
+    );
+}
+
+#[test]
+fn effects_that_carry_a_take_serialise_the_take_inline() {
+    let take = Take {
+        notes: vec![RecordedNote {
+            pitch: 60,
+            velocity: 100,
+            start_pulse: 0,
+            end_pulse: 4,
+        }],
+    };
+
+    assert_eq!(
+        serde_json::to_value(Effect::PlaySchedule(take)).unwrap(),
+        serde_json::json!({
+            "type": "playSchedule",
+            "notes": [{ "pitch": 60, "velocity": 100, "start_pulse": 0, "end_pulse": 4 }]
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(Effect::ConfirmOverwriteRecording).unwrap(),
+        serde_json::json!({ "type": "confirmOverwriteRecording" })
     );
 }

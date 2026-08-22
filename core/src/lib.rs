@@ -62,6 +62,36 @@ pub struct ProjectState {
     /// This has no structural effect on notes; it only decides whether a
     /// future recording action waits for [`count_in_length_in_pulses`].
     pub count_in_enabled: bool,
+    /// The recording area's one take, if anything has been recorded yet.
+    /// `None` until the first `StopRecording`.
+    pub take: Option<Take>,
+    /// Whether the shell is currently capturing live MIDI into a take.
+    /// A performance/session flag, not a musical edit — see
+    /// [`Command::StartRecording`].
+    pub is_recording: bool,
+    /// Whether the shell is currently sounding a schedule (today, only the
+    /// take's own isolated playback — see [`Command::PlayTake`]). The record
+    /// button is disabled while this is true, per the spec.
+    pub is_playing: bool,
+}
+
+/// A single note exactly as played, captured during recording. Pulse
+/// offsets, never wall-clock time or bars (CONTEXT.md's "Pulse").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordedNote {
+    pub pitch: u8,
+    pub velocity: u8,
+    pub start_pulse: u64,
+    pub end_pulse: u64,
+}
+
+/// A recording in the recording area (CONTEXT.md's "Take"): the raw notes
+/// exactly as played. There is at most one at a time, and it is never
+/// rewritten by any later edit — trimming and quantising (issues #9, #10)
+/// are views applied on read, not mutations of this data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct Take {
+    pub notes: Vec<RecordedNote>,
 }
 
 impl Default for ProjectState {
@@ -73,6 +103,9 @@ impl Default for ProjectState {
             reverb: 0,
             metronome_enabled: false,
             count_in_enabled: true,
+            take: None,
+            is_recording: false,
+            is_playing: false,
         }
     }
 }
@@ -105,6 +138,32 @@ pub enum Command {
     /// Switches the one-bar count-in on or off. This is intentionally excluded
     /// from undo/redo history, like [`Command::SetReverb`].
     SetCountInEnabled(bool),
+    /// Arms recording. Not itself undoable — arming isn't a musical edit, the
+    /// take that results from it is (see [`Command::StopRecording`]).
+    ///
+    /// If the recording area already holds a take and `force` is `false`,
+    /// this reports [`Effect::ConfirmOverwriteRecording`] and leaves
+    /// `is_recording` untouched, per the spec's "recording over a take that
+    /// has not been added to the library asks for confirmation first" — the
+    /// library (#11) doesn't exist yet, so every existing take counts.
+    /// Resending with `force: true` (after the shell has confirmed with the
+    /// user) proceeds unconditionally. A missing take never needs `force`.
+    StartRecording { force: bool },
+    /// Finishes recording, replacing the recording area's take with `take`.
+    /// The shell builds `take` from the raw MIDI it captured — the core
+    /// performs no I/O and cannot listen for MIDI itself. Always sent as
+    /// `Some` by the shell; `None` only appears as this command's own
+    /// undo inverse, when there was no take to revert to. Undoable: reverts
+    /// to whatever take (if any) was there before.
+    StopRecording(Option<Take>),
+    /// Starts isolated playback of the current take, if there is one. Not
+    /// undoable — playback isn't a musical edit. Reports
+    /// [`Effect::PlaySchedule`] with the take to play; a no-op with no
+    /// effect if the recording area is empty.
+    PlayTake,
+    /// Reported by the shell once a schedule requested by `PlayTake` has
+    /// finished sounding. Not undoable.
+    PlaybackFinished,
     /// Reverts the most recently applied command. Not itself logged.
     Undo,
     /// Reapplies the most recently undone command. Not itself logged.
@@ -129,6 +188,14 @@ pub enum Effect {
     /// The selected MIDI input is unavailable. This is a shell-originated
     /// status, reported through the same effect vocabulary as other feedback.
     NoMidiDeviceAvailable,
+    /// `StartRecording { force: false }` was applied while the recording
+    /// area already held a take. The shell should ask the user to confirm,
+    /// then resend `StartRecording { force: true }` if they agree.
+    ConfirmOverwriteRecording,
+    /// `PlayTake` was applied with a take present: the shell should turn
+    /// this into real audio and, once it has finished sounding, apply
+    /// `PlaybackFinished`.
+    PlaySchedule(Take),
 }
 
 /// The number of applied commands retained in the undo log. The spec (#1,
@@ -239,6 +306,32 @@ impl DawCore {
                 // not change any recorded material or the undo history.
                 Vec::new()
             }
+            Command::StartRecording { force } => {
+                if self.state.take.is_some() && !force {
+                    vec![Effect::ConfirmOverwriteRecording]
+                } else {
+                    self.state.is_recording = true;
+                    Vec::new()
+                }
+            }
+            Command::StopRecording(take) => {
+                self.state.is_recording = false;
+                let inverse = Command::StopRecording(self.state.take.clone());
+                self.state.take = take.clone();
+                self.log(Command::StopRecording(take), inverse);
+                Vec::new()
+            }
+            Command::PlayTake => match self.state.take.clone() {
+                Some(take) => {
+                    self.state.is_playing = true;
+                    vec![Effect::PlaySchedule(take)]
+                }
+                None => Vec::new(),
+            },
+            Command::PlaybackFinished => {
+                self.state.is_playing = false;
+                Vec::new()
+            }
         };
 
         Applied {
@@ -313,11 +406,15 @@ impl DawCore {
                 beat_unit,
             } => state.time_signature = (*beats_per_bar, *beat_unit),
             Command::SetInstrument(instrument) => state.instrument = *instrument,
+            Command::StopRecording(take) => state.take = take.clone(),
             // These controls are never logged, so undo/redo never reaches
             // them. The remaining variants cannot occur in the log either.
             Command::SetReverb(_)
             | Command::SetMetronomeEnabled(_)
             | Command::SetCountInEnabled(_)
+            | Command::StartRecording { .. }
+            | Command::PlayTake
+            | Command::PlaybackFinished
             | Command::NewProject
             | Command::Undo
             | Command::Redo => {}
@@ -347,4 +444,73 @@ pub fn is_bar_accent(pulse: u64, time_signature: (u8, u8)) -> bool {
 /// [`is_bar_accent`].
 pub fn count_in_length_in_pulses(time_signature: (u8, u8)) -> u64 {
     u64::from(time_signature.0)
+}
+
+/// The inverse of [`pulse_elapsed_time`]: how many whole pulses have elapsed
+/// by `elapsed` at `bpm`. Used to timestamp live-captured MIDI (wall-clock
+/// time, from the shell) into the pulse offsets a [`Take`] stores.
+pub fn pulse_at_elapsed_time(elapsed: Duration, bpm: u16) -> u64 {
+    (elapsed.as_secs_f64() * f64::from(bpm) / 60.0) as u64
+}
+
+/// One note-on or note-off observed live, timestamped as elapsed time since
+/// recording's pulse zero (i.e. after any count-in). This is the shell's
+/// input to [`build_take`] — it owns the native MIDI connection and the
+/// clock; the core only turns the raw stream into pulse-stamped notes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedEvent {
+    pub elapsed: Duration,
+    pub pitch: u8,
+    pub velocity: u8,
+    pub is_on: bool,
+}
+
+/// Turns a chronological stream of captured note on/off events into a
+/// [`Take`], pairing each note-on with its note-off. A pitch still held when
+/// `stopped_at` is reached is captured as ending exactly there, per the
+/// spec's "notes still held at the stop point are captured as ending there"
+/// — this is the one place that rule is enforced, so every caller (real
+/// MIDI, or a test driving a `ScriptedMidiInput`) gets it for free. A second
+/// note-on for an already-held pitch closes the first at that pulse before
+/// opening the next, so a fast retrigger never produces a note with no end.
+pub fn build_take(events: &[CapturedEvent], stopped_at: Duration, bpm: u16) -> Take {
+    let mut notes = Vec::new();
+    let mut held: std::collections::HashMap<u8, (u64, u8)> = std::collections::HashMap::new();
+
+    for event in events {
+        let pulse = pulse_at_elapsed_time(event.elapsed, bpm);
+        if event.is_on {
+            if let Some((start_pulse, velocity)) = held.remove(&event.pitch) {
+                notes.push(RecordedNote {
+                    pitch: event.pitch,
+                    velocity,
+                    start_pulse,
+                    end_pulse: pulse,
+                });
+            }
+            held.insert(event.pitch, (pulse, event.velocity));
+        } else if let Some((start_pulse, velocity)) = held.remove(&event.pitch) {
+            notes.push(RecordedNote {
+                pitch: event.pitch,
+                velocity,
+                start_pulse,
+                end_pulse: pulse,
+            });
+        }
+    }
+
+    let stop_pulse = pulse_at_elapsed_time(stopped_at, bpm);
+    let mut still_held: Vec<_> = held.into_iter().collect();
+    still_held.sort_by_key(|(pitch, _)| *pitch);
+    for (pitch, (start_pulse, velocity)) in still_held {
+        notes.push(RecordedNote {
+            pitch,
+            velocity,
+            start_pulse,
+            end_pulse: stop_pulse.max(start_pulse),
+        });
+    }
+
+    notes.sort_by_key(|note| note.start_pulse);
+    Take { notes }
 }

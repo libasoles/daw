@@ -10,14 +10,16 @@
 
 mod audio;
 mod midi;
+mod recording;
 
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
-use audio::AudioEngine;
-use daw_core::{Applied, Command, DawCore, ProjectState};
+use audio::{AudioEngine, ScheduledEvent};
+use daw_core::{pulse_elapsed_time, Applied, Command, DawCore, Effect, ProjectState, Take};
 use midi::{load_selected_device, spawn_reconnector, MidiInputHandle, MidiStatus};
+use recording::RecordingHandle;
 use tauri::{AppHandle, Manager, State};
 
 /// The fixed note the debug trigger sounds. There is no MIDI input yet
@@ -57,35 +59,129 @@ fn select_midi_device(app: AppHandle, device_id: String) -> Result<MidiStatus, S
 /// one `#[tauri::command]` per `Command` variant) mirrors the core's own
 /// seam — `Command -> DawCore -> (ProjectState, Vec<Effect>)` — so adding a
 /// `Command` variant in a later ticket never means adding IPC surface here.
+///
+/// Two commands (`StopRecording`, in `stop_recording` below) can't be built
+/// by the webview at all — turning raw MIDI into a `Take` needs the native
+/// capture state only the shell holds — so they go through their own
+/// dedicated command and call [`dispatch`] directly instead.
 #[tauri::command]
-fn apply_command(
-    core: State<Mutex<DawCore>>,
-    audio: State<AudioEngineHandle>,
-    command: Command,
-) -> Applied {
+fn apply_command(app: AppHandle, command: Command) -> Applied {
+    dispatch(&app, command)
+}
+
+/// Shared by every entry point that turns a `Command` into an `Applied`:
+/// applies it to the single `DawCore`, pushes the resulting sound controls
+/// to the audio engine, and carries out any effect the core asked for that
+/// the shell — not the webview — is responsible for.
+fn dispatch(app: &AppHandle, command: Command) -> Applied {
+    let starting_recording = matches!(command, Command::StartRecording { .. });
+
     let applied = {
+        let core = app.state::<Mutex<DawCore>>();
         let mut core = core.lock().expect("DawCore mutex poisoned");
         core.apply(command)
     };
 
-    if let Some(engine) = audio
-        .0
-        .lock()
-        .expect("audio engine mutex poisoned")
-        .as_mut()
-    {
-        if let Err(err) = engine.configure(
-            applied.state.instrument,
-            applied.state.reverb,
-            applied.state.bpm,
-            applied.state.time_signature,
-            applied.state.metronome_enabled,
-        ) {
-            eprintln!("could not update audio controls: {err}");
+    sync_audio_engine(app, &applied.state, applied.state.metronome_enabled);
+
+    if starting_recording && applied.state.is_recording {
+        recording::begin_session(app, &applied.state);
+    }
+
+    for effect in &applied.effects {
+        if let Effect::PlaySchedule(take) = effect {
+            play_take_schedule(app, take, applied.state.bpm);
         }
     }
 
     applied
+}
+
+fn sync_audio_engine(app: &AppHandle, state: &ProjectState, metronome_enabled: bool) {
+    let engine = app.state::<AudioEngineHandle>();
+    let mut engine = engine.0.lock().expect("audio engine mutex poisoned");
+    if let Some(engine) = engine.as_mut() {
+        if let Err(err) = engine.configure(
+            state.instrument,
+            state.reverb,
+            state.bpm,
+            state.time_signature,
+            metronome_enabled,
+        ) {
+            eprintln!("could not update audio controls: {err}");
+        }
+    }
+}
+
+/// Turns a take into a schedule the audio engine can play frame-accurately
+/// (see `audio::engine`'s synth-thread scheduling), and arranges for
+/// `Command::PlaybackFinished` to be applied once it's done — computed from
+/// the take's own length rather than any signal back from the audio thread,
+/// the same way `play_test_note` already turns a fixed hold into a timed
+/// note-off on a plain thread.
+fn play_take_schedule(app: &AppHandle, take: &Take, bpm: u16) {
+    let events: Vec<ScheduledEvent> = take
+        .notes
+        .iter()
+        .flat_map(|note| {
+            [
+                ScheduledEvent {
+                    at_pulse: note.start_pulse,
+                    pitch: note.pitch,
+                    velocity: note.velocity,
+                    is_on: true,
+                },
+                ScheduledEvent {
+                    at_pulse: note.end_pulse,
+                    pitch: note.pitch,
+                    velocity: 0,
+                    is_on: false,
+                },
+            ]
+        })
+        .collect();
+    let last_pulse = take
+        .notes
+        .iter()
+        .map(|note| note.end_pulse)
+        .max()
+        .unwrap_or(0);
+    let total_duration = pulse_elapsed_time(last_pulse, bpm).unwrap_or(Duration::ZERO);
+
+    let started = {
+        let engine = app.state::<AudioEngineHandle>();
+        let mut engine = engine.0.lock().expect("audio engine mutex poisoned");
+        match engine.as_mut() {
+            Some(engine) => engine.play_schedule(events).is_ok(),
+            None => false,
+        }
+    };
+
+    // Always resolves eventually — immediately if there was nothing to play,
+    // otherwise after the schedule's own length — so `is_playing` can never
+    // get stuck true with no audio actually sounding.
+    let app = app.clone();
+    thread::spawn(move || {
+        if started {
+            thread::sleep(total_duration);
+        }
+        dispatch(&app, Command::PlaybackFinished);
+    });
+}
+
+/// Finishes recording: turns the shell's buffered MIDI capture into a
+/// `Take` and applies it as `Command::StopRecording`, the one step the
+/// webview cannot request through the generic `apply_command` (it never
+/// sees the raw MIDI the native connection captured).
+#[tauri::command]
+fn stop_recording(app: AppHandle) -> Applied {
+    let bpm = {
+        let core = app.state::<Mutex<DawCore>>();
+        let core = core.lock().expect("DawCore mutex poisoned");
+        core.state().bpm
+    };
+    let take = recording::finish_session(&app, bpm);
+    dispatch(&app, Command::StopRecording(Some(take)))
 }
 
 /// The project state as it stands right now, for the webview to render on
@@ -165,6 +261,7 @@ pub fn run() {
                 }
             };
             app.manage(AudioEngineHandle(Mutex::new(engine)));
+            app.manage(RecordingHandle(Mutex::new(None)));
 
             // The one-line preference lives under the OS app-data directory,
             // deliberately apart from a future project.json. It identifies a
@@ -182,6 +279,7 @@ pub fn run() {
             apply_command,
             project_state,
             play_test_note,
+            stop_recording,
             list_midi_devices,
             select_midi_device
         ])

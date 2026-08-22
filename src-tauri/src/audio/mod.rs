@@ -59,4 +59,4 @@ mod synth;
 // `engine.rs` and `synth.rs` construct and match on them internally, and
 // `AudioEngine::start`'s `Result` surfaces `AudioEngineError` through this
 // module's one public type without needing the error type itself exported.
-pub use engine::AudioEngine;
+pub use engine::{AudioEngine, ScheduledEvent};

@@ -245,6 +245,13 @@ impl MidiController {
 
 fn route_live_event(app: &AppHandle, event: MidiEvent) {
     let received_at = Instant::now();
+
+    // Recording (issue #8) listens to the same live stream independently of
+    // whether live monitoring below succeeds — capturing what was played is
+    // more important than the monitoring path that lets the performer hear
+    // it back immediately.
+    crate::recording::capture_live_note(app, event.kind.clone(), received_at);
+
     let engine = app.state::<AudioEngineHandle>();
     let mut engine = engine.0.lock().expect("audio engine mutex poisoned");
     let Some(engine) = engine.as_mut() else {

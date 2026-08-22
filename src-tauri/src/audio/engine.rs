@@ -36,6 +36,30 @@ pub enum EngineCommand {
     NoteOff {
         pitch: u8,
     },
+    /// Plays a take back in isolation (issue #8): the shell converts each
+    /// [`daw_core::RecordedNote`] into two of these (one on, one off) and
+    /// sends the lot at once. Firing them at the right frame is the synth
+    /// thread's job — see its per-sample loop, which already derives "what
+    /// pulse is this frame" for the metronome and reuses that math here.
+    PlaySchedule(Vec<ScheduledEvent>),
+}
+
+/// One note on/off to fire at a given pulse, relative to whenever the
+/// schedule carrying it started playing. See [`EngineCommand::PlaySchedule`].
+pub struct ScheduledEvent {
+    pub at_pulse: u64,
+    pub pitch: u8,
+    pub velocity: u8,
+    pub is_on: bool,
+}
+
+/// A schedule the synth thread is actively working through: the events,
+/// sorted by `at_pulse`, the render-frame they started at (pulse zero), and
+/// how far through the list it has gotten.
+struct ActiveSchedule {
+    events: Vec<ScheduledEvent>,
+    started_at_frame: u64,
+    next_index: usize,
 }
 
 /// Interleaved stereo samples buffered between the synth thread and the
@@ -208,6 +232,18 @@ impl AudioEngine {
             .map_err(|_| EngineCommandDropped)
     }
 
+    /// Requests that the synth thread play `events` back, timed against its
+    /// own running pulse clock rather than the caller's. Non-blocking; see
+    /// [`Self::note_on`].
+    pub fn play_schedule(
+        &mut self,
+        events: Vec<ScheduledEvent>,
+    ) -> Result<(), EngineCommandDropped> {
+        self.commands
+            .push(EngineCommand::PlaySchedule(events))
+            .map_err(|_| EngineCommandDropped)
+    }
+
     /// Updates the global sound controls on the synth thread. Keeping these
     /// commands alongside note events means every current and future trigger
     /// path receives the same selected instrument and reverb automatically.
@@ -263,6 +299,8 @@ fn spawn_synth_thread(
         let mut rendered_frames = 0u64;
         let mut click_frames_remaining = 0usize;
         let mut click_amplitude = 0.0;
+        let mut schedule: Option<ActiveSchedule> = None;
+        let mut held_from_schedule: Vec<u8> = Vec::new();
         let mut left = [0f32; RENDER_CHUNK_FRAMES];
         let mut right = [0f32; RENDER_CHUNK_FRAMES];
         loop {
@@ -299,12 +337,53 @@ fn spawn_synth_thread(
                         }
                     }
                     EngineCommand::NoteOff { pitch } => synth.note_off(instrument, pitch, 0),
+                    EngineCommand::PlaySchedule(mut events) => {
+                        // A new schedule pre-empts whatever the previous one
+                        // left sounding, so a fast re-trigger can never
+                        // strand a note on.
+                        for pitch in held_from_schedule.drain(..) {
+                            synth.note_off(instrument, pitch, 0);
+                        }
+                        events.sort_by_key(|event| event.at_pulse);
+                        schedule = Some(ActiveSchedule {
+                            events,
+                            started_at_frame: rendered_frames,
+                            next_index: 0,
+                        });
+                    }
                 }
             }
 
             synth.render(&mut left, &mut right);
 
             for (l, r) in left.iter_mut().zip(right.iter_mut()) {
+                if let Some(active) = schedule.as_mut().filter(|_| bpm != 0) {
+                    // Same frames-to-pulse conversion as the metronome click
+                    // below, just anchored at the schedule's own start frame
+                    // instead of the stream's.
+                    let elapsed_frames = rendered_frames - active.started_at_frame;
+                    let pulse = elapsed_frames.saturating_mul(u64::from(bpm))
+                        / (u64::from(sample_rate) * 60);
+                    while active
+                        .events
+                        .get(active.next_index)
+                        .is_some_and(|event| event.at_pulse <= pulse)
+                    {
+                        let event = &active.events[active.next_index];
+                        if event.is_on {
+                            synth.note_on(instrument, event.pitch, event.velocity, pulse);
+                            held_from_schedule.push(event.pitch);
+                        } else {
+                            synth.note_off(instrument, event.pitch, pulse);
+                            held_from_schedule.retain(|&pitch| pitch != event.pitch);
+                        }
+                        active.next_index += 1;
+                    }
+                    if active.next_index >= active.events.len() {
+                        schedule = None;
+                    }
+                }
+
                 if metronome_enabled && bpm != 0 {
                     // This is the inverse of `daw_core::pulse_elapsed_time`:
                     // elapsed rendered frames determine the current pulse.

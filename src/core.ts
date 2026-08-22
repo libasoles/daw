@@ -9,6 +9,17 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+export interface RecordedNote {
+  pitch: number;
+  velocity: number;
+  start_pulse: number;
+  end_pulse: number;
+}
+
+export interface Take {
+  notes: RecordedNote[];
+}
+
 export interface ProjectState {
   bpm: number;
   time_signature: [number, number];
@@ -16,6 +27,9 @@ export interface ProjectState {
   reverb: number;
   metronome_enabled: boolean;
   count_in_enabled: boolean;
+  take: Take | null;
+  is_recording: boolean;
+  is_playing: boolean;
 }
 
 export type Command =
@@ -29,13 +43,17 @@ export type Command =
   | { type: "setReverb"; payload: number }
   | { type: "setMetronomeEnabled"; payload: boolean }
   | { type: "setCountInEnabled"; payload: boolean }
+  | { type: "startRecording"; payload: { force: boolean } }
+  | { type: "playTake" }
   | { type: "undo" }
   | { type: "redo" };
 
 export type Effect =
   | { type: "nothingToUndo" }
   | { type: "nothingToRedo" }
-  | { type: "noMidiDeviceAvailable" };
+  | { type: "noMidiDeviceAvailable" }
+  | { type: "confirmOverwriteRecording" }
+  | ({ type: "playSchedule" } & Take);
 
 export interface Applied {
   state: ProjectState;
@@ -50,6 +68,16 @@ export function applyCommand(command: Command): Promise<Applied> {
 /** The project state as it stands right now, to render on first load. */
 export function fetchProjectState(): Promise<ProjectState> {
   return invoke<ProjectState>("project_state");
+}
+
+/**
+ * Finishes recording: the shell turns the raw MIDI it captured natively into
+ * a `Take` and applies it as `Command::StopRecording`. This can't be a
+ * regular `applyCommand` call — the webview never sees the raw MIDI stream,
+ * only the shell does.
+ */
+export function stopRecording(): Promise<Applied> {
+  return invoke<Applied>("stop_recording");
 }
 
 /**

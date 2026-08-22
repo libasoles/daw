@@ -20,6 +20,7 @@ import {
   listMidiDevices,
   playTestNote,
   selectMidiDevice,
+  stopRecording,
   type MidiStatus,
   type ProjectState,
 } from "./core";
@@ -117,6 +118,27 @@ function render(root: HTMLElement, state: ProjectState): void {
           />
         </label>
       </div>
+      <div class="recording-area" aria-label="Recording area">
+        <button
+          class="record-button${state.is_recording ? " record-button--active" : ""}"
+          type="button"
+          data-record
+          aria-pressed="${state.is_recording}"
+          ${state.is_playing ? "disabled" : ""}
+        >
+          ${state.is_recording ? "Stop (R)" : "Record (R)"}
+        </button>
+        ${
+          state.take
+            ? /* html */ `
+              <button class="take-play" type="button" data-play-take ${state.is_playing ? "disabled" : ""}>
+                Play take
+              </button>
+              <span class="take-summary">${state.take.notes.length} note${state.take.notes.length === 1 ? "" : "s"}</span>
+            `
+            : /* html */ `<span class="take-summary take-summary--empty">no take yet</span>`
+        }
+      </div>
       <div class="midi-control" aria-label="MIDI input">
         <label class="sound-control">
           <span class="sound-control__label">MIDI input</span>
@@ -182,6 +204,40 @@ async function setReverb(root: HTMLElement, reverb: number): Promise<void> {
     output.textContent = `${value}%`;
   }
   await applyCommand({ type: "setReverb", payload: value });
+}
+
+/**
+ * Arms recording. If the recording area already holds a take, the core
+ * reports `confirmOverwriteRecording` and leaves recording off; this asks
+ * the user to confirm, then resends with `force: true` if they agree, per
+ * the spec's "recording over a take that has not been added to the library
+ * asks for confirmation first."
+ */
+async function startRecording(root: HTMLElement): Promise<void> {
+  const applied = await applyCommand({ type: "startRecording", payload: { force: false } });
+  const needsConfirmation = applied.effects.some(
+    (effect) => effect.type === "confirmOverwriteRecording",
+  );
+  if (needsConfirmation) {
+    render(root, applied.state);
+    if (!window.confirm("Recording will replace the current take. Continue?")) {
+      return;
+    }
+    const forced = await applyCommand({ type: "startRecording", payload: { force: true } });
+    render(root, forced.state);
+    return;
+  }
+  render(root, applied.state);
+}
+
+async function endRecording(root: HTMLElement): Promise<void> {
+  const applied = await stopRecording();
+  render(root, applied.state);
+}
+
+async function playTake(root: HTMLElement): Promise<void> {
+  const applied = await applyCommand({ type: "playTake" });
+  render(root, applied.state);
 }
 
 async function undo(root: HTMLElement): Promise<void> {
@@ -325,6 +381,46 @@ function wireUndoRedoKeys(root: HTMLElement): void {
   });
 }
 
+/** Whether recording is currently armed, read from the record button's own
+ * `aria-pressed` rather than tracked separately — the rendered DOM is
+ * already the single source of truth for what the last `Applied` said. */
+function isRecording(root: HTMLElement): boolean {
+  const button = root.querySelector<HTMLButtonElement>("[data-record]");
+  return button?.getAttribute("aria-pressed") === "true";
+}
+
+function toggleRecording(root: HTMLElement): void {
+  const button = root.querySelector<HTMLButtonElement>("[data-record]");
+  if (button?.disabled) return;
+  if (isRecording(root)) {
+    void endRecording(root);
+  } else {
+    void startRecording(root);
+  }
+}
+
+function wireRecordingControls(root: HTMLElement): void {
+  root.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("[data-record]")) {
+      toggleRecording(root);
+    }
+    if (target.closest("[data-play-take]")) {
+      void playTake(root);
+    }
+  });
+
+  window.addEventListener("keydown", (event) => {
+    if (event.key.toLowerCase() !== "r") return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const active = document.activeElement;
+    // Never hijack `r` while the user is typing in a field.
+    if (active instanceof HTMLInputElement || active instanceof HTMLSelectElement) return;
+    event.preventDefault();
+    toggleRecording(root);
+  });
+}
+
 async function main(): Promise<void> {
   const root = document.querySelector<HTMLElement>("#app");
   if (!root) {
@@ -335,6 +431,7 @@ async function main(): Promise<void> {
   render(root, state);
   wireTempoControls(root);
   wireSoundControls(root);
+  wireRecordingControls(root);
   wireTestNoteButton(root);
   wireMidiPicker(root);
   wireUndoRedoKeys(root);
