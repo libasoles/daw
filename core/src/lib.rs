@@ -543,8 +543,10 @@ impl DawCore {
                 if let Some(take) = self.state.take.as_ref() {
                     let block = Block {
                         id: self.state.next_block_id,
-                        name: format!("Take {}", self.state.blocks.len() + 1),
-                        color: BLOCK_COLORS[self.state.blocks.len() % BLOCK_COLORS.len()].into(),
+                        name: format!("Take {}", self.state.next_block_id),
+                        color: BLOCK_COLORS
+                            [(self.state.next_block_id as usize - 1) % BLOCK_COLORS.len()]
+                        .into(),
                         instrument: self.state.instrument,
                         notes: take.notes(),
                     };

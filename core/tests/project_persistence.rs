@@ -1,4 +1,58 @@
-use daw_core::{Command, DawCore};
+use daw_core::{Command, DawCore, RecordedNote, Take};
+
+#[test]
+fn opening_a_saved_project_restores_every_setting_and_every_block() {
+    let mut core = DawCore::new();
+    core.apply(Command::SetBpm(140));
+    core.apply(Command::SetTimeSignature {
+        beats_per_bar: 3,
+        beat_unit: 4,
+    });
+    core.apply(Command::SetReverb(42));
+    core.apply(Command::SetMetronomeEnabled(true));
+    core.apply(Command::SetCountInEnabled(true));
+    core.apply(Command::StopRecording(Some(Take::from_raw_notes(vec![
+        RecordedNote {
+            pitch: 60,
+            velocity: 100,
+            start_pulse: 0,
+            end_pulse: 4,
+        },
+    ]))));
+    core.apply(Command::AddTakeToLibrary);
+    let block_id = core.state().blocks[0].id;
+    core.apply(Command::RenameBlock {
+        id: block_id,
+        name: "Verse".into(),
+    });
+    core.apply(Command::RecolourBlock {
+        id: block_id,
+        color: "#60a5fa".into(),
+    });
+
+    let saved_document = core.project_document();
+
+    let mut reopened = DawCore::new();
+    reopened.apply(Command::OpenProject(saved_document.clone()));
+
+    assert_eq!(reopened.state(), &saved_document);
+    assert!(!reopened.state().is_dirty);
+    assert!(!reopened.state().is_recording);
+    assert!(!reopened.state().is_playing);
+    assert_eq!(reopened.state().bpm, 140);
+    assert_eq!(reopened.state().time_signature, (3, 4));
+    assert_eq!(reopened.state().reverb, 42);
+    assert!(reopened.state().metronome_enabled);
+    assert!(reopened.state().count_in_enabled);
+    assert_eq!(reopened.state().blocks.len(), 1);
+    assert_eq!(reopened.state().blocks[0].name, "Verse");
+    assert_eq!(reopened.state().blocks[0].color, "#60a5fa");
+
+    // A freshly opened project starts clean: further saves stay disabled
+    // until something actually changes.
+    reopened.apply(Command::ProjectSaved);
+    assert!(!reopened.state().is_dirty);
+}
 
 #[test]
 fn dirty_state_tracks_manual_saves_and_undoes() {

@@ -1,7 +1,7 @@
 //! Issue #11 crosses the public command seam: adding freezes the take's view
 //! into an immutable block owned by the project library.
 
-use daw_core::{Command, DawCore, RecordedNote, Take, Trim};
+use daw_core::{Command, DawCore, Effect, RecordedNote, Take, Trim};
 
 #[test]
 fn adding_a_take_to_the_library_freezes_its_current_view_and_is_undoable() {
@@ -63,4 +63,82 @@ fn renaming_recolouring_and_deleting_a_block_are_undoable() {
     assert_eq!(restored.state.blocks[0].name, "Verse");
     assert_eq!(restored.state.blocks[0].color, "#60a5fa");
     assert_eq!(restored.state.blocks[0].notes, block.notes);
+}
+
+fn record_and_freeze(core: &mut DawCore, pitch: u8) {
+    core.apply(Command::StopRecording(Some(Take::from_raw_notes(vec![
+        RecordedNote {
+            pitch,
+            velocity: 100,
+            start_pulse: 0,
+            end_pulse: 4,
+        },
+    ]))));
+    core.apply(Command::AddTakeToLibrary);
+}
+
+#[test]
+fn a_block_played_in_isolation_reports_its_own_schedule_and_is_mutually_exclusive_with_take_playback(
+) {
+    let mut core = DawCore::new();
+    record_and_freeze(&mut core, 60);
+    let block = core.state().blocks[0].clone();
+
+    let applied = core.apply(Command::PlayBlock(0));
+    assert_eq!(
+        applied.effects,
+        vec![Effect::PlaySchedule(Take::from_raw_notes(block.notes))]
+    );
+    assert!(applied.state.is_playing);
+
+    // Take playback is refused while a block is playing.
+    let take_attempt = core.apply(Command::PlayTake);
+    assert_eq!(take_attempt.effects, Vec::<Effect>::new());
+    assert!(take_attempt.state.is_playing);
+
+    core.apply(Command::PlaybackFinished);
+    assert!(!core.state().is_playing);
+
+    // Once playback is idle again, PlayBlock is refused while a take is playing.
+    core.apply(Command::PlayTake);
+    let block_attempt = core.apply(Command::PlayBlock(0));
+    assert_eq!(block_attempt.effects, Vec::<Effect>::new());
+}
+
+#[test]
+fn playing_an_out_of_range_block_index_does_nothing() {
+    let mut core = DawCore::new();
+
+    let applied = core.apply(Command::PlayBlock(0));
+
+    assert_eq!(applied.effects, Vec::<Effect>::new());
+    assert!(!applied.state.is_playing);
+}
+
+#[test]
+fn deleting_a_block_does_not_cause_the_next_block_to_reuse_its_name_or_colour() {
+    let mut core = DawCore::new();
+    record_and_freeze(&mut core, 60);
+    record_and_freeze(&mut core, 62);
+    record_and_freeze(&mut core, 64);
+    assert_eq!(core.state().blocks[2].name, "Take 3");
+
+    let second_id = core.state().blocks[1].id;
+    core.apply(Command::DeleteBlock(second_id));
+    assert_eq!(core.state().blocks.len(), 2);
+
+    record_and_freeze(&mut core, 67);
+
+    let names: Vec<_> = core.state().blocks.iter().map(|b| b.name.clone()).collect();
+    assert_eq!(names, vec!["Take 1", "Take 3", "Take 4"]);
+    let colors: Vec<_> = core
+        .state()
+        .blocks
+        .iter()
+        .map(|b| b.color.clone())
+        .collect();
+    assert_ne!(
+        colors[1], colors[2],
+        "surviving block and the freshly added one must keep distinct colours"
+    );
 }
