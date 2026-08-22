@@ -327,6 +327,60 @@ body {
   color: var(--ink-faint);
 }
 
+.take-editor {
+  width: min(28rem, 100%);
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-base);
+}
+
+.take-editor svg {
+  display: block;
+  min-width: 100%;
+}
+
+.take-trim-handles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background: var(--surface-raised);
+}
+
+.take-trim-handle {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.take-grid line {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.take-notes rect {
+  fill: var(--accent);
+}
+
+.take-edit-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  color: var(--ink-dim);
+  font-size: var(--text-xs);
+}
+
+.take-edit-controls label {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.take-edit-controls button,
+.take-edit-controls select {
+  font: inherit;
+}
+
 /* --- Native MIDI input picker (issue #6). ------------------------------ */
 
 .midi-control {

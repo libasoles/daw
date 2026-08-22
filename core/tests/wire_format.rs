@@ -3,7 +3,7 @@
 //! TypeScript. These tests pin that shape down so a change here is a visible,
 //! deliberate decision rather than a silent break of the frontend.
 
-use daw_core::{Applied, Command, Effect, ProjectState, RecordedNote, Take};
+use daw_core::{Applied, Command, Effect, ProjectState, Quantisation, RecordedNote, Take, Trim};
 
 #[test]
 fn commands_serialise_as_an_adjacently_tagged_object() {
@@ -47,19 +47,34 @@ fn commands_serialise_as_an_adjacently_tagged_object() {
         serde_json::json!({ "type": "startRecording", "payload": { "force": false } })
     );
     assert_eq!(
-        serde_json::to_value(Command::StopRecording(Some(Take {
-            notes: vec![RecordedNote {
+        serde_json::to_value(Command::SetTakeTrim(Trim {
+            start_pulse: 2,
+            end_pulse: 6
+        }))
+        .unwrap(),
+        serde_json::json!({ "type": "setTakeTrim", "payload": { "start_pulse": 2, "end_pulse": 6 } })
+    );
+    assert_eq!(
+        serde_json::to_value(Command::SetTakeQuantisation(Quantisation::Quarter)).unwrap(),
+        serde_json::json!({ "type": "setTakeQuantisation", "payload": "quarter" })
+    );
+    assert_eq!(
+        serde_json::to_value(Command::StopRecording(Some(Take::from_raw_notes(vec![
+            RecordedNote {
                 pitch: 60,
                 velocity: 100,
                 start_pulse: 0,
                 end_pulse: 4
-            }]
-        })))
+            }
+        ]))))
         .unwrap(),
         serde_json::json!({
             "type": "stopRecording",
             "payload": {
-                "notes": [{ "pitch": 60, "velocity": 100, "start_pulse": 0, "end_pulse": 4 }]
+                "raw_notes": [{ "pitch": 60, "velocity": 100, "start_pulse": 0, "end_pulse": 4 }],
+                "notes": [{ "pitch": 60, "velocity": 100, "start_pulse": 0, "end_pulse": 4 }],
+                "trim": { "start_pulse": 0, "end_pulse": 4 },
+                "quantisation": "off"
             }
         })
     );
@@ -130,20 +145,21 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
 
 #[test]
 fn effects_that_carry_a_take_serialise_the_take_inline() {
-    let take = Take {
-        notes: vec![RecordedNote {
-            pitch: 60,
-            velocity: 100,
-            start_pulse: 0,
-            end_pulse: 4,
-        }],
-    };
+    let take = Take::from_raw_notes(vec![RecordedNote {
+        pitch: 60,
+        velocity: 100,
+        start_pulse: 0,
+        end_pulse: 4,
+    }]);
 
     assert_eq!(
         serde_json::to_value(Effect::PlaySchedule(take)).unwrap(),
         serde_json::json!({
             "type": "playSchedule",
-            "notes": [{ "pitch": 60, "velocity": 100, "start_pulse": 0, "end_pulse": 4 }]
+            "raw_notes": [{ "pitch": 60, "velocity": 100, "start_pulse": 0, "end_pulse": 4 }],
+            "notes": [{ "pitch": 60, "velocity": 100, "start_pulse": 0, "end_pulse": 4 }],
+            "trim": { "start_pulse": 0, "end_pulse": 4 },
+            "quantisation": "off"
         })
     );
     assert_eq!(

@@ -22,7 +22,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub mod ports;
 
@@ -89,10 +89,145 @@ pub struct RecordedNote {
 /// exactly as played. There is at most one at a time, and it is never
 /// rewritten by any later edit — trimming and quantising (issues #9, #10)
 /// are views applied on read, not mutations of this data.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct Take {
-    pub notes: Vec<RecordedNote>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Trim {
+    pub start_pulse: u64,
+    pub end_pulse: u64,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum Quantisation {
+    #[default]
+    Off,
+    Whole,
+    Half,
+    Quarter,
+    Eighth,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Take {
+    /// The MIDI capture, retained exactly as it was recorded.
+    pub raw_notes: Vec<RecordedNote>,
+    pub trim: Trim,
+    pub quantisation: Quantisation,
+}
+
+impl Take {
+    pub fn from_raw_notes(raw_notes: Vec<RecordedNote>) -> Self {
+        let end_pulse = raw_notes
+            .iter()
+            .map(|note| note.end_pulse)
+            .max()
+            .unwrap_or(0);
+        Self {
+            raw_notes,
+            trim: Trim {
+                start_pulse: 0,
+                end_pulse,
+            },
+            quantisation: Quantisation::Off,
+        }
+    }
+
+    /// Applies the take's editable views every time it is read. Captured MIDI
+    /// remains the sole stored source of notes.
+    pub fn notes(&self) -> Vec<RecordedNote> {
+        self.raw_notes
+            .iter()
+            .filter_map(|note| {
+                // Quantise the capture first, then apply the trim. This keeps
+                // either edit order equivalent and means a trimmed edge is
+                // always an exact audible boundary.
+                let start_pulse =
+                    quantise_pulse(note.start_pulse, self.quantisation).max(self.trim.start_pulse);
+                let end_pulse =
+                    quantise_pulse(note.end_pulse, self.quantisation).min(self.trim.end_pulse);
+                (start_pulse < end_pulse).then(|| RecordedNote {
+                    start_pulse,
+                    end_pulse,
+                    ..note.clone()
+                })
+            })
+            .filter(|note| note.start_pulse < note.end_pulse)
+            .collect()
+    }
+
+    fn set_trim(&mut self, trim: Trim) {
+        let raw_end = self
+            .raw_notes
+            .iter()
+            .map(|note| note.end_pulse)
+            .max()
+            .unwrap_or(0);
+        let start_pulse = trim.start_pulse.min(raw_end);
+        self.trim = Trim {
+            start_pulse,
+            end_pulse: trim.end_pulse.min(raw_end).max(start_pulse),
+        };
+    }
+
+    fn set_quantisation(&mut self, quantisation: Quantisation) {
+        self.quantisation = quantisation;
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct TakeWire {
+    raw_notes: Vec<RecordedNote>,
+    /// Sent to the shell as a read-only rendered view; ignored when loading
+    /// so it can never become a second source of truth.
+    #[serde(default)]
+    notes: Vec<RecordedNote>,
+    trim: Trim,
+    quantisation: Quantisation,
+}
+
+impl Serialize for Take {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        TakeWire {
+            raw_notes: self.raw_notes.clone(),
+            notes: self.notes(),
+            trim: self.trim,
+            quantisation: self.quantisation,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Take {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = TakeWire::deserialize(deserializer)?;
+        let _ = wire.notes;
+        Ok(Self {
+            raw_notes: wire.raw_notes,
+            trim: wire.trim,
+            quantisation: wire.quantisation,
+        })
+    }
+}
+
+impl Default for Take {
+    fn default() -> Self {
+        Self::from_raw_notes(Vec::new())
+    }
+}
+
+fn quantise_pulse(pulse: u64, quantisation: Quantisation) -> u64 {
+    let grid = match quantisation {
+        Quantisation::Off => return pulse,
+        Quantisation::Whole => 8,
+        Quantisation::Half => 4,
+        Quantisation::Quarter => 2,
+        Quantisation::Eighth => 1,
+    };
+    (pulse + grid / 2) / grid * grid
+}
+
+/// Stored pulses are eighth-note subdivisions. This preserves exact integer
+/// offsets for every grid the editor offers while tempo remains beat-based.
+pub const PULSES_PER_BEAT: u64 = 2;
 
 impl Default for ProjectState {
     fn default() -> Self {
@@ -125,7 +260,10 @@ pub enum Command {
     /// Sets the global tempo in beats per minute.
     SetBpm(u16),
     /// Sets the project's time signature (beats per bar, beat unit).
-    SetTimeSignature { beats_per_bar: u8, beat_unit: u8 },
+    SetTimeSignature {
+        beats_per_bar: u8,
+        beat_unit: u8,
+    },
     /// Selects the global instrument using the opaque id understood by the
     /// synth port.
     SetInstrument(InstrumentId),
@@ -148,7 +286,9 @@ pub enum Command {
     /// library (#11) doesn't exist yet, so every existing take counts.
     /// Resending with `force: true` (after the shell has confirmed with the
     /// user) proceeds unconditionally. A missing take never needs `force`.
-    StartRecording { force: bool },
+    StartRecording {
+        force: bool,
+    },
     /// Finishes recording, replacing the recording area's take with `take`.
     /// The shell builds `take` from the raw MIDI it captured — the core
     /// performs no I/O and cannot listen for MIDI itself. Always sent as
@@ -156,6 +296,8 @@ pub enum Command {
     /// undo inverse, when there was no take to revert to. Undoable: reverts
     /// to whatever take (if any) was there before.
     StopRecording(Option<Take>),
+    SetTakeTrim(Trim),
+    SetTakeQuantisation(Quantisation),
     /// Starts isolated playback of the current take, if there is one. Not
     /// undoable — playback isn't a musical edit. Reports
     /// [`Effect::PlaySchedule`] with the take to play; a no-op with no
@@ -321,6 +463,22 @@ impl DawCore {
                 self.log(Command::StopRecording(take), inverse);
                 Vec::new()
             }
+            Command::SetTakeTrim(trim) => {
+                if let Some(take) = self.state.take.as_mut() {
+                    let inverse = Command::SetTakeTrim(take.trim);
+                    take.set_trim(trim);
+                    self.log(Command::SetTakeTrim(trim), inverse);
+                }
+                Vec::new()
+            }
+            Command::SetTakeQuantisation(quantisation) => {
+                if let Some(take) = self.state.take.as_mut() {
+                    let inverse = Command::SetTakeQuantisation(take.quantisation);
+                    take.set_quantisation(quantisation);
+                    self.log(Command::SetTakeQuantisation(quantisation), inverse);
+                }
+                Vec::new()
+            }
             Command::PlayTake => match self.state.take.clone() {
                 Some(take) => {
                     self.state.is_playing = true;
@@ -407,6 +565,16 @@ impl DawCore {
             } => state.time_signature = (*beats_per_bar, *beat_unit),
             Command::SetInstrument(instrument) => state.instrument = *instrument,
             Command::StopRecording(take) => state.take = take.clone(),
+            Command::SetTakeTrim(trim) => {
+                if let Some(take) = state.take.as_mut() {
+                    take.set_trim(*trim);
+                }
+            }
+            Command::SetTakeQuantisation(quantisation) => {
+                if let Some(take) = state.take.as_mut() {
+                    take.set_quantisation(*quantisation);
+                }
+            }
             // These controls are never logged, so undo/redo never reaches
             // them. The remaining variants cannot occur in the log either.
             Command::SetReverb(_)
@@ -427,7 +595,9 @@ impl DawCore {
 /// Notes remain stored at their pulse offsets, so callers can use this only
 /// when rendering playback. A zero BPM has no meaningful wall-clock mapping.
 pub fn pulse_elapsed_time(pulse: u64, bpm: u16) -> Option<Duration> {
-    (bpm != 0).then(|| Duration::from_secs_f64(pulse as f64 * 60.0 / f64::from(bpm)))
+    (bpm != 0).then(|| {
+        Duration::from_secs_f64(pulse as f64 * 60.0 / (f64::from(bpm) * PULSES_PER_BEAT as f64))
+    })
 }
 
 /// Whether `pulse` is the first pulse of its bar and should receive the
@@ -435,7 +605,7 @@ pub fn pulse_elapsed_time(pulse: u64, bpm: u16) -> Option<Duration> {
 /// application's unit of time, while the time signature has no structural
 /// power.
 pub fn is_bar_accent(pulse: u64, time_signature: (u8, u8)) -> bool {
-    let beats_per_bar = u64::from(time_signature.0);
+    let beats_per_bar = u64::from(time_signature.0) * PULSES_PER_BEAT;
     beats_per_bar != 0 && pulse.is_multiple_of(beats_per_bar)
 }
 
@@ -443,14 +613,14 @@ pub fn is_bar_accent(pulse: u64, time_signature: (u8, u8)) -> bool {
 /// The beat unit deliberately has no role for the same reason as in
 /// [`is_bar_accent`].
 pub fn count_in_length_in_pulses(time_signature: (u8, u8)) -> u64 {
-    u64::from(time_signature.0)
+    u64::from(time_signature.0) * PULSES_PER_BEAT
 }
 
 /// The inverse of [`pulse_elapsed_time`]: how many whole pulses have elapsed
 /// by `elapsed` at `bpm`. Used to timestamp live-captured MIDI (wall-clock
 /// time, from the shell) into the pulse offsets a [`Take`] stores.
 pub fn pulse_at_elapsed_time(elapsed: Duration, bpm: u16) -> u64 {
-    (elapsed.as_secs_f64() * f64::from(bpm) / 60.0) as u64
+    (elapsed.as_secs_f64() * f64::from(bpm) * PULSES_PER_BEAT as f64 / 60.0) as u64
 }
 
 /// One note-on or note-off observed live, timestamped as elapsed time since
@@ -512,5 +682,5 @@ pub fn build_take(events: &[CapturedEvent], stopped_at: Duration, bpm: u16) -> T
     }
 
     notes.sort_by_key(|note| note.start_pulse);
-    Take { notes }
+    Take::from_raw_notes(notes)
 }

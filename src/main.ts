@@ -23,6 +23,7 @@ import {
   stopRecording,
   type MidiStatus,
   type ProjectState,
+  type Quantisation,
 } from "./core";
 
 /** Three stacked blocks on a timeline — the shape the whole app is about. */
@@ -41,6 +42,24 @@ const REVERB_MIN = 0;
 const REVERB_MAX = 100;
 const PIANO = 0;
 const ACCORDION = 1;
+
+function takeEndPulse(state: ProjectState): number {
+  return state.take?.raw_notes.reduce((end, note) => Math.max(end, note.end_pulse), 0) ?? 0;
+}
+
+function takeGrid(state: ProjectState): string {
+  const take = state.take;
+  if (!take) return "";
+  const end = takeEndPulse(state);
+  const width = Math.max(end, 1) * 32;
+  const lines = Array.from({ length: end + 1 }, (_, pulse) =>
+    `<line x1="${pulse * 32}" y1="0" x2="${pulse * 32}" y2="88" />`,
+  ).join("");
+  const notes = take.notes.map((note) =>
+    `<rect x="${note.start_pulse * 32}" y="${72 - note.pitch % 5 * 12}" width="${Math.max(2, (note.end_pulse - note.start_pulse) * 32)}" height="9" rx="2" />`,
+  ).join("");
+  return `<div class="take-editor"><svg viewBox="0 0 ${width} 88" aria-label="Take notes against the pulse grid"><g class="take-grid">${lines}</g><g class="take-notes">${notes}</g></svg><div class="take-trim-handles" aria-label="Trim handles"><input class="take-trim-handle take-trim-handle--start" type="range" data-trim-start min="0" max="${end}" step="1" value="${take.trim.start_pulse}" aria-label="Trim start" /><input class="take-trim-handle take-trim-handle--end" type="range" data-trim-end min="0" max="${end}" step="1" value="${take.trim.end_pulse}" aria-label="Trim end" /></div></div>`;
+}
 
 function render(root: HTMLElement, state: ProjectState): void {
   root.innerHTML = /* html */ `
@@ -135,6 +154,13 @@ function render(root: HTMLElement, state: ProjectState): void {
                 Play take
               </button>
               <span class="take-summary">${state.take.notes.length} note${state.take.notes.length === 1 ? "" : "s"}</span>
+              ${takeGrid(state)}
+              <div class="take-edit-controls" aria-label="Take editing">
+                <label>Quantise <select data-quantisation aria-label="Quantisation">
+                  ${(["off", "whole", "half", "quarter", "eighth"] as Quantisation[]).map((value) => `<option value="${value}"${state.take?.quantisation === value ? " selected" : ""}>${value}</option>`).join("")}
+                </select></label>
+                <button type="button" data-apply-quantisation>Apply</button>
+              </div>
             `
             : /* html */ `<span class="take-summary take-summary--empty">no take yet</span>`
         }
@@ -237,6 +263,18 @@ async function endRecording(root: HTMLElement): Promise<void> {
 
 async function playTake(root: HTMLElement): Promise<void> {
   const applied = await applyCommand({ type: "playTake" });
+  render(root, applied.state);
+}
+
+async function setTakeTrim(root: HTMLElement, startPulse: number, endPulse: number): Promise<void> {
+  const applied = await applyCommand({ type: "setTakeTrim", payload: { start_pulse: startPulse, end_pulse: endPulse } });
+  render(root, applied.state);
+}
+
+async function applyTakeQuantisation(root: HTMLElement): Promise<void> {
+  const select = root.querySelector<HTMLSelectElement>("[data-quantisation]");
+  if (!select) return;
+  const applied = await applyCommand({ type: "setTakeQuantisation", payload: select.value as Quantisation });
   render(root, applied.state);
 }
 
@@ -408,6 +446,17 @@ function wireRecordingControls(root: HTMLElement): void {
     if (target.closest("[data-play-take]")) {
       void playTake(root);
     }
+    if (target.closest("[data-apply-quantisation]")) {
+      void applyTakeQuantisation(root);
+    }
+  });
+
+  root.addEventListener("change", (event) => {
+    const input = event.target as HTMLInputElement;
+    if (!input.matches("[data-trim-start], [data-trim-end]")) return;
+    const start = root.querySelector<HTMLInputElement>("[data-trim-start]");
+    const end = root.querySelector<HTMLInputElement>("[data-trim-end]");
+    if (start && end) void setTakeTrim(root, Number(start.value), Number(end.value));
   });
 
   window.addEventListener("keydown", (event) => {

@@ -17,8 +17,13 @@ export interface RecordedNote {
 }
 
 export interface Take {
+  raw_notes: RecordedNote[];
   notes: RecordedNote[];
+  trim: { start_pulse: number; end_pulse: number };
+  quantisation: Quantisation;
 }
+
+export type Quantisation = "off" | "whole" | "half" | "quarter" | "eighth";
 
 export interface ProjectState {
   bpm: number;
@@ -44,6 +49,8 @@ export type Command =
   | { type: "setMetronomeEnabled"; payload: boolean }
   | { type: "setCountInEnabled"; payload: boolean }
   | { type: "startRecording"; payload: { force: boolean } }
+  | { type: "setTakeTrim"; payload: { start_pulse: number; end_pulse: number } }
+  | { type: "setTakeQuantisation"; payload: Quantisation }
   | { type: "playTake" }
   | { type: "undo" }
   | { type: "redo" };

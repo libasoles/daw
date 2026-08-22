@@ -120,8 +120,8 @@ fn sync_audio_engine(app: &AppHandle, state: &ProjectState, metronome_enabled: b
 /// the same way `play_test_note` already turns a fixed hold into a timed
 /// note-off on a plain thread.
 fn play_take_schedule(app: &AppHandle, take: &Take, bpm: u16) {
-    let events: Vec<ScheduledEvent> = take
-        .notes
+    let notes = take.notes();
+    let events: Vec<ScheduledEvent> = notes
         .iter()
         .flat_map(|note| {
             [
@@ -140,8 +140,7 @@ fn play_take_schedule(app: &AppHandle, take: &Take, bpm: u16) {
             ]
         })
         .collect();
-    let last_pulse = take
-        .notes
+    let last_pulse = notes
         .iter()
         .map(|note| note.end_pulse)
         .max()

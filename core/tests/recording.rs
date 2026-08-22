@@ -61,14 +61,12 @@ fn a_scripted_note_on_and_off_becomes_one_recorded_note() {
 
     assert_eq!(
         take,
-        Take {
-            notes: vec![RecordedNote {
-                pitch: 60,
-                velocity: 91,
-                start_pulse: 0,
-                end_pulse: 2,
-            }]
-        }
+        Take::from_raw_notes(vec![RecordedNote {
+            pitch: 60,
+            velocity: 91,
+            start_pulse: 0,
+            end_pulse: 4,
+        }])
     );
 }
 
@@ -85,14 +83,12 @@ fn a_note_still_held_at_stop_is_captured_as_ending_there() {
 
     assert_eq!(
         take,
-        Take {
-            notes: vec![RecordedNote {
-                pitch: 64,
-                velocity: 80,
-                start_pulse: 2,
-                end_pulse: 6,
-            }]
-        }
+        Take::from_raw_notes(vec![RecordedNote {
+            pitch: 64,
+            velocity: 80,
+            start_pulse: 4,
+            end_pulse: 12,
+        }])
     );
 }
 
@@ -116,10 +112,10 @@ fn tempo_governs_how_captured_wall_clock_time_maps_to_pulses() {
     let at_120_bpm = build_take(&events, Duration::from_secs(3), 120);
     let at_60_bpm = build_take(&events, Duration::from_secs(3), 60);
 
-    assert_eq!(at_120_bpm.notes[0].start_pulse, 2);
-    assert_eq!(at_120_bpm.notes[0].end_pulse, 4);
-    assert_eq!(at_60_bpm.notes[0].start_pulse, 1);
-    assert_eq!(at_60_bpm.notes[0].end_pulse, 2);
+    assert_eq!(at_120_bpm.notes()[0].start_pulse, 4);
+    assert_eq!(at_120_bpm.notes()[0].end_pulse, 8);
+    assert_eq!(at_60_bpm.notes()[0].start_pulse, 2);
+    assert_eq!(at_60_bpm.notes()[0].end_pulse, 4);
 }
 
 #[test]
@@ -127,14 +123,12 @@ fn stop_recording_replaces_the_take_and_is_undoable() {
     let mut core = DawCore::new();
     core.apply(Command::StartRecording { force: false });
 
-    let take = Take {
-        notes: vec![RecordedNote {
-            pitch: 60,
-            velocity: 100,
-            start_pulse: 0,
-            end_pulse: 4,
-        }],
-    };
+    let take = Take::from_raw_notes(vec![RecordedNote {
+        pitch: 60,
+        velocity: 100,
+        start_pulse: 0,
+        end_pulse: 4,
+    }]);
     let applied = core.apply(Command::StopRecording(Some(take.clone())));
 
     assert_eq!(applied.state.take, Some(take));
@@ -146,28 +140,24 @@ fn stop_recording_replaces_the_take_and_is_undoable() {
     let redone = core.apply(Command::Redo);
     assert_eq!(
         redone.state.take,
-        Some(Take {
-            notes: vec![RecordedNote {
-                pitch: 60,
-                velocity: 100,
-                start_pulse: 0,
-                end_pulse: 4,
-            }]
-        })
+        Some(Take::from_raw_notes(vec![RecordedNote {
+            pitch: 60,
+            velocity: 100,
+            start_pulse: 0,
+            end_pulse: 4,
+        }]))
     );
 }
 
 #[test]
 fn recording_over_an_existing_take_asks_for_confirmation_first() {
     let mut core = DawCore::new();
-    let take = Take {
-        notes: vec![RecordedNote {
-            pitch: 60,
-            velocity: 100,
-            start_pulse: 0,
-            end_pulse: 4,
-        }],
-    };
+    let take = Take::from_raw_notes(vec![RecordedNote {
+        pitch: 60,
+        velocity: 100,
+        start_pulse: 0,
+        end_pulse: 4,
+    }]);
     core.apply(Command::StartRecording { force: false });
     core.apply(Command::StopRecording(Some(take.clone())));
 
@@ -194,14 +184,12 @@ fn starting_recording_with_no_existing_take_never_needs_confirmation() {
 #[test]
 fn playing_a_take_reports_a_schedule_and_marks_playback_active() {
     let mut core = DawCore::new();
-    let take = Take {
-        notes: vec![RecordedNote {
-            pitch: 60,
-            velocity: 100,
-            start_pulse: 0,
-            end_pulse: 4,
-        }],
-    };
+    let take = Take::from_raw_notes(vec![RecordedNote {
+        pitch: 60,
+        velocity: 100,
+        start_pulse: 0,
+        end_pulse: 4,
+    }]);
     core.apply(Command::StartRecording { force: false });
     core.apply(Command::StopRecording(Some(take.clone())));
 
