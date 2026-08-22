@@ -286,9 +286,9 @@ pub enum Command {
     /// Requests a manual save under an application-owned project name. The
     /// core emits [`Effect::SaveProject`] for the shell's storage adapter.
     SaveProject(String),
-    /// Records that the shell successfully wrote the current document. This
+    /// Records that the shell successfully wrote this exact document. This
     /// is not undoable: it changes the save baseline, not musical content.
-    ProjectSaved,
+    ProjectSaved(ProjectState),
     /// Sets the global tempo in beats per minute.
     SetBpm(u16),
     /// Sets the project's time signature (beats per bar, beat unit).
@@ -482,8 +482,8 @@ impl DawCore {
                 name,
                 document: self.project_document(),
             }],
-            Command::ProjectSaved => {
-                self.saved_state = Some(Self::document_state(&self.state));
+            Command::ProjectSaved(document) => {
+                self.saved_state = Some(Self::document_state(&document));
                 Vec::new()
             }
             Command::Undo => self.undo(),
@@ -766,7 +766,7 @@ impl DawCore {
             | Command::NewProject
             | Command::OpenProject(_)
             | Command::SaveProject(_)
-            | Command::ProjectSaved
+            | Command::ProjectSaved(_)
             | Command::Undo
             | Command::Redo => {}
         }

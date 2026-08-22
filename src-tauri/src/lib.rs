@@ -219,7 +219,7 @@ fn save_project(app: AppHandle, requested_name: Option<String>) -> Result<Projec
     else {
         unreachable!("the match above only accepts save effects")
     };
-    let document = serde_json::to_string(&document)
+    let encoded_document = serde_json::to_string(&document)
         .map_err(|error| format!("could not encode project: {error}"))?;
 
     {
@@ -228,13 +228,13 @@ fn save_project(app: AppHandle, requested_name: Option<String>) -> Result<Projec
             .0
             .lock()
             .expect("project storage mutex poisoned")
-            .save(&name, document)?;
+            .save(&name, encoded_document)?;
     }
 
     let state = {
         let core = app.state::<Mutex<DawCore>>();
         let mut core = core.lock().expect("DawCore mutex poisoned");
-        core.apply(Command::ProjectSaved).state
+        core.apply(Command::ProjectSaved(document)).state
     };
     *app.state::<CurrentProjectName>()
         .0

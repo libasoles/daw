@@ -9,7 +9,7 @@ fn dirty_state_tracks_manual_saves_and_undoes() {
         "an unnamed project needs its first save"
     );
 
-    core.apply(Command::ProjectSaved);
+    core.apply(Command::ProjectSaved(core.project_document()));
     assert!(!core.state().is_dirty);
 
     core.apply(Command::SetBpm(140));
@@ -35,7 +35,7 @@ fn opening_a_saved_document_restores_it_and_resets_its_dirty_state() {
     storage
         .save(&name, serde_json::to_string(&document).unwrap())
         .unwrap();
-    core.apply(Command::ProjectSaved);
+    core.apply(Command::ProjectSaved(document.clone()));
 
     core.apply(Command::SetBpm(90));
     let loaded = serde_json::from_str(&storage.load("first-song").unwrap().unwrap()).unwrap();
@@ -43,4 +43,18 @@ fn opening_a_saved_document_restores_it_and_resets_its_dirty_state() {
 
     assert_eq!(core.project_document(), document);
     assert!(!core.state().is_dirty);
+}
+
+#[test]
+fn a_change_made_while_saving_stays_dirty_after_the_write_finishes() {
+    let mut core = DawCore::new();
+    let save = core.apply(Command::SaveProject("first-song".into()));
+    let Effect::SaveProject { document, .. } = save.effects.as_slice()[0].clone() else {
+        panic!("saving must ask the shell to persist a document");
+    };
+
+    core.apply(Command::SetBpm(140));
+    core.apply(Command::ProjectSaved(document));
+
+    assert!(core.state().is_dirty);
 }
