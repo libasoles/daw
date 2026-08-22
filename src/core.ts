@@ -76,6 +76,7 @@ export type Effect =
   | { type: "nothingToRedo" }
   | { type: "noMidiDeviceAvailable" }
   | { type: "confirmOverwriteRecording" }
+  | { type: "saveProject"; name: string; document: ProjectState }
   | ({ type: "playSchedule" } & Take);
 
 export interface Applied {

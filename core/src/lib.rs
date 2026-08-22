@@ -283,6 +283,9 @@ pub enum Command {
     /// Replaces the current project with a document the shell read through
     /// its storage port. Opening never enters undo history.
     OpenProject(ProjectState),
+    /// Requests a manual save under an application-owned project name. The
+    /// core emits [`Effect::SaveProject`] for the shell's storage adapter.
+    SaveProject(String),
     /// Records that the shell successfully wrote the current document. This
     /// is not undoable: it changes the save baseline, not musical content.
     ProjectSaved,
@@ -376,6 +379,12 @@ pub enum Effect {
     /// area already held a take. The shell should ask the user to confirm,
     /// then resend `StartRecording { force: true }` if they agree.
     ConfirmOverwriteRecording,
+    /// The shell should persist this durable project document under `name`.
+    /// It must report success by applying [`Command::ProjectSaved`].
+    SaveProject {
+        name: String,
+        document: ProjectState,
+    },
     /// `PlayTake` was applied with a take present: the shell should turn
     /// this into real audio and, once it has finished sounding, apply
     /// `PlaybackFinished`.
@@ -469,6 +478,10 @@ impl DawCore {
                 self.clear_history();
                 Vec::new()
             }
+            Command::SaveProject(name) => vec![Effect::SaveProject {
+                name,
+                document: self.project_document(),
+            }],
             Command::ProjectSaved => {
                 self.saved_state = Some(Self::document_state(&self.state));
                 Vec::new()
@@ -752,6 +765,7 @@ impl DawCore {
             | Command::PlaybackFinished
             | Command::NewProject
             | Command::OpenProject(_)
+            | Command::SaveProject(_)
             | Command::ProjectSaved
             | Command::Undo
             | Command::Redo => {}

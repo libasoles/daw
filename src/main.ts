@@ -48,6 +48,7 @@ const ACCORDION = 1;
 let projects: string[] = [];
 let activeProjectName: string | null = null;
 let isNamingProject = false;
+let renderedProjectState: ProjectState | null = null;
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>'"]/g, (character) => `&#${character.charCodeAt(0)};`);
@@ -72,6 +73,7 @@ function takeGrid(state: ProjectState): string {
 }
 
 function render(root: HTMLElement, state: ProjectState): void {
+  renderedProjectState = state;
   root.innerHTML = /* html */ `
     <section class="placeholder" data-tauri-drag-region>
       ${mark}
@@ -337,6 +339,7 @@ async function refreshProjects(root: HTMLElement): Promise<void> {
 }
 
 async function saveCurrentProject(root: HTMLElement, name?: string): Promise<void> {
+  if (!renderedProjectState?.is_dirty) return;
   if (!activeProjectName && !name) {
     isNamingProject = true;
     render(root, await fetchProjectState());
