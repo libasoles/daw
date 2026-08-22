@@ -1,10 +1,13 @@
 //! Ports: traits the core depends on and the shell implements. Real in
 //! production, faked in tests (ADR-0001, `CONTEXT.md`).
 //!
-//! Issue #4 introduces the first of the four ports named in the spec
-//! (issue #1): [`Synth`]. The others (`MidiInput`, `AudioOutput`, `Storage`)
-//! arrive with the tickets that need them (#6, #4/#6, #13) rather than as
-//! placeholders here.
+//! The concrete adapters live in the shell; the small scripted MIDI adapter
+//! below exists so integration tests can exercise the same contract without
+//! a keyboard or an operating system MIDI service.
+
+use std::fmt;
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// Identifies an instrument to sound, without the trait knowing what
 /// instruments exist. The spec (issue #1, story 77) wants a third instrument
@@ -15,6 +18,103 @@
 /// piano and accordion ids to bundled SoundFont presets; future ids extend
 /// that mapping.
 pub type InstrumentId = u32;
+
+/// A MIDI input exposed to a musician. `id` is an opaque, shell-provided
+/// identifier suitable for saving as an application preference; `name` is
+/// only for display.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct MidiDevice {
+    pub id: String,
+    pub name: String,
+}
+
+/// A note event observed at a MIDI input. `timestamp` is monotonic elapsed
+/// time since that input subscription began, rather than wall-clock time, so
+/// it is safe to compare in tests and useful for latency instrumentation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MidiEvent {
+    pub timestamp: Duration,
+    pub kind: MidiEventKind,
+}
+
+/// The MIDI messages that live playing needs. Other MIDI messages remain
+/// outside the core until a musical feature requires them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MidiEventKind {
+    NoteOn { pitch: u8, velocity: u8 },
+    NoteOff { pitch: u8 },
+}
+
+/// Failure to select a MIDI input. Kept as text so platform adapters can
+/// preserve useful native error detail without importing platform error types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MidiInputError(pub String);
+
+impl fmt::Display for MidiInputError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for MidiInputError {}
+
+/// Callback invoked by a subscribed MIDI input.
+pub type MidiEventHandler = Box<dyn Fn(MidiEvent) + Send + 'static>;
+
+/// The native MIDI boundary. It deliberately deals in device enumeration and
+/// timestamped note messages, never raw bytes or a browser MIDI API.
+pub trait MidiInput: Send {
+    fn devices(&self) -> Result<Vec<MidiDevice>, MidiInputError>;
+    fn subscribe(
+        &mut self,
+        device_id: &str,
+        handler: MidiEventHandler,
+    ) -> Result<(), MidiInputError>;
+}
+
+/// A dependency-free MIDI fake that replays a fixed script at its recorded
+/// offsets. It is public because tests outside this crate must use the port's
+/// public surface (ADR-0001).
+pub struct ScriptedMidiInput {
+    device: MidiDevice,
+    events: Vec<MidiEvent>,
+}
+
+impl ScriptedMidiInput {
+    pub fn new(device: MidiDevice, events: Vec<MidiEvent>) -> Self {
+        Self { device, events }
+    }
+}
+
+impl MidiInput for ScriptedMidiInput {
+    fn devices(&self) -> Result<Vec<MidiDevice>, MidiInputError> {
+        Ok(vec![self.device.clone()])
+    }
+
+    fn subscribe(
+        &mut self,
+        device_id: &str,
+        handler: MidiEventHandler,
+    ) -> Result<(), MidiInputError> {
+        if device_id != self.device.id {
+            return Err(MidiInputError(format!(
+                "MIDI device not found: {device_id}"
+            )));
+        }
+
+        let events = self.events.clone();
+        thread::spawn(move || {
+            let started = Instant::now();
+            for event in events {
+                if let Some(wait) = event.timestamp.checked_sub(started.elapsed()) {
+                    thread::sleep(wait);
+                }
+                handler(event);
+            }
+        });
+        Ok(())
+    }
+}
 
 /// The adapter boundary that keeps the sound engine replaceable. Swapping
 /// `rustysynth` for a different synthesiser is a new implementation of this

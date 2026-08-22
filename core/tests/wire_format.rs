@@ -64,7 +64,7 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
             instrument: 1,
             reverb: 75,
         },
-        effects: vec![Effect::NothingToUndo],
+        effects: vec![Effect::NoMidiDeviceAvailable],
     };
 
     assert_eq!(
@@ -76,7 +76,7 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
                 "instrument": 1,
                 "reverb": 75
             },
-            "effects": [{ "type": "nothingToUndo" }]
+            "effects": [{ "type": "noMidiDeviceAvailable" }]
         })
     );
 }

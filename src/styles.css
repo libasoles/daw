@@ -227,6 +227,20 @@ body {
   cursor: default;
 }
 
+/* --- Native MIDI input picker (issue #6). ------------------------------ */
+
+.midi-control {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-1);
+}
+
+.midi-control__status {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: var(--text-xs);
+}
+
 /* --- Test note button (issue #4): proves audio reaches the speakers. ---- */
 
 .test-note {

@@ -9,6 +9,7 @@
 //! variants in later tickets.
 
 mod audio;
+mod midi;
 
 use std::sync::Mutex;
 use std::thread;
@@ -16,6 +17,7 @@ use std::time::Duration;
 
 use audio::AudioEngine;
 use daw_core::{Applied, Command, DawCore, ProjectState};
+use midi::{load_selected_device, spawn_reconnector, MidiInputHandle, MidiStatus};
 use tauri::{AppHandle, Manager, State};
 
 /// The fixed note the debug trigger sounds. There is no MIDI input yet
@@ -30,6 +32,25 @@ const DEBUG_NOTE_DURATION: Duration = Duration::from_millis(500);
 /// spec calls for reporting that rather than crashing, so the app keeps
 /// running with sound simply unavailable.
 struct AudioEngineHandle(Mutex<Option<AudioEngine>>);
+
+/// Lists native MIDI inputs and the live connection state for the picker.
+#[tauri::command]
+fn list_midi_devices(app: AppHandle) -> MidiStatus {
+    let handle = app.state::<MidiInputHandle>();
+    let mut controller = handle.0.lock().expect("MIDI input mutex poisoned");
+    controller.refresh(&app);
+    controller.status()
+}
+
+/// Selects a MIDI input. The id is stored in app data, not project state, and
+/// the reconnect poller will use it automatically at future launches.
+#[tauri::command]
+fn select_midi_device(app: AppHandle, device_id: String) -> Result<MidiStatus, String> {
+    let handle = app.state::<MidiInputHandle>();
+    let mut controller = handle.0.lock().expect("MIDI input mutex poisoned");
+    controller.select(&app, device_id)?;
+    Ok(controller.status())
+}
 
 /// The webview's one way in: turn a `Command` into the new `ProjectState` and
 /// any `Effect`s, via `DawCore::apply`. A single generic handler (rather than
@@ -133,12 +154,24 @@ pub fn run() {
             };
             app.manage(AudioEngineHandle(Mutex::new(engine)));
 
+            // The one-line preference lives under the OS app-data directory,
+            // deliberately apart from a future project.json. It identifies a
+            // local peripheral, so syncing it with musical content would be
+            // misleading and fragile across machines.
+            let selected_device = load_selected_device(app.handle());
+            app.manage(MidiInputHandle(Mutex::new(midi::MidiController::new(
+                selected_device,
+            ))));
+            spawn_reconnector(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             apply_command,
             project_state,
-            play_test_note
+            play_test_note,
+            list_midi_devices,
+            select_midi_device
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

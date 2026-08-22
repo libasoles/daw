@@ -4,7 +4,7 @@
 
 use std::fmt;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use daw_core::ports::{InstrumentId, Synth};
@@ -25,6 +25,7 @@ pub enum EngineCommand {
     NoteOn {
         pitch: u8,
         velocity: u8,
+        received_at: Option<Instant>,
     },
     NoteOff {
         pitch: u8,
@@ -32,10 +33,10 @@ pub enum EngineCommand {
 }
 
 /// Interleaved stereo samples buffered between the synth thread and the
-/// real-time callback: large enough to absorb scheduling jitter on the synth
-/// thread, small enough to keep audible latency low. ~0.75s of stereo audio
-/// at 44.1kHz.
-const AUDIO_QUEUE_CAPACITY: usize = 1 << 16;
+/// real-time callback. This is deliberately only about 12 ms at 44.1 kHz
+/// (512 stereo frames): a larger pre-rendered cushion would delay every live
+/// MIDI note by its entire depth before the callback could hear it.
+const AUDIO_QUEUE_CAPACITY: usize = 1 << 10;
 
 /// Pending note on/off requests the synth thread hasn't drained yet. Debug
 /// triggering is the only source of these today, so this only needs to be
@@ -168,7 +169,29 @@ impl AudioEngine {
     /// caller (an IPC thread).
     pub fn note_on(&mut self, pitch: u8, velocity: u8) -> Result<(), EngineCommandDropped> {
         self.commands
-            .push(EngineCommand::NoteOn { pitch, velocity })
+            .push(EngineCommand::NoteOn {
+                pitch,
+                velocity,
+                received_at: None,
+            })
+            .map_err(|_| EngineCommandDropped)
+    }
+
+    /// The live MIDI path. The synth thread logs its receipt time against the
+    /// native callback timestamp, giving a repeatable internal latency metric
+    /// without pretending to measure keyboard scanning, driver, DAC, or air.
+    pub fn note_on_live(
+        &mut self,
+        pitch: u8,
+        velocity: u8,
+        received_at: Instant,
+    ) -> Result<(), EngineCommandDropped> {
+        self.commands
+            .push(EngineCommand::NoteOn {
+                pitch,
+                velocity,
+                received_at: Some(received_at),
+            })
             .map_err(|_| EngineCommandDropped)
     }
 
@@ -229,8 +252,18 @@ fn spawn_synth_thread(
                         instrument = next_instrument;
                         synth.set_reverb(reverb);
                     }
-                    EngineCommand::NoteOn { pitch, velocity } => {
-                        synth.note_on(instrument, pitch, velocity, 0)
+                    EngineCommand::NoteOn {
+                        pitch,
+                        velocity,
+                        received_at,
+                    } => {
+                        synth.note_on(instrument, pitch, velocity, 0);
+                        if let Some(received_at) = received_at {
+                            eprintln!(
+                                "MIDI internal latency: note {pitch} reached synth thread in {:?}",
+                                received_at.elapsed()
+                            );
+                        }
                     }
                     EngineCommand::NoteOff { pitch } => synth.note_off(instrument, pitch, 0),
                 }

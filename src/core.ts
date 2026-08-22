@@ -28,7 +28,10 @@ export type Command =
   | { type: "undo" }
   | { type: "redo" };
 
-export type Effect = { type: "nothingToUndo" } | { type: "nothingToRedo" };
+export type Effect =
+  | { type: "nothingToUndo" }
+  | { type: "nothingToRedo" }
+  | { type: "noMidiDeviceAvailable" };
 
 export interface Applied {
   state: ProjectState;
@@ -54,4 +57,23 @@ export function fetchProjectState(): Promise<ProjectState> {
  */
 export function playTestNote(): Promise<void> {
   return invoke<void>("play_test_note");
+}
+
+export interface MidiDevice {
+  id: string;
+  name: string;
+}
+
+export interface MidiStatus {
+  devices: MidiDevice[];
+  selectedDeviceId: string | null;
+  message: string;
+}
+
+export function listMidiDevices(): Promise<MidiStatus> {
+  return invoke<MidiStatus>("list_midi_devices");
+}
+
+export function selectMidiDevice(deviceId: string): Promise<MidiStatus> {
+  return invoke<MidiStatus>("select_midi_device", { deviceId });
 }

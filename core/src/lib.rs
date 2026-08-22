@@ -107,6 +107,9 @@ pub enum Effect {
     NothingToUndo,
     /// `Redo` was applied with nothing in the redo log.
     NothingToRedo,
+    /// The selected MIDI input is unavailable. This is a shell-originated
+    /// status, reported through the same effect vocabulary as other feedback.
+    NoMidiDeviceAvailable,
 }
 
 /// The number of applied commands retained in the undo log. The spec (#1,
@@ -219,6 +222,16 @@ impl DawCore {
     pub fn clear_history(&mut self) {
         self.undo_log.clear();
         self.redo_log.clear();
+    }
+
+    /// Reports that the shell cannot find the selected MIDI device. This does
+    /// not alter musical project state or undo history: device selection is an
+    /// application preference, not part of a project.
+    pub fn no_midi_device_available(&self) -> Applied {
+        Applied {
+            state: self.state.clone(),
+            effects: vec![Effect::NoMidiDeviceAvailable],
+        }
     }
 
     /// Records an applied command and its inverse, evicting the oldest entry

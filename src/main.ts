@@ -14,7 +14,15 @@
  * the same project state future live and timeline trigger paths will use.
  */
 
-import { applyCommand, fetchProjectState, playTestNote, type ProjectState } from "./core";
+import {
+  applyCommand,
+  fetchProjectState,
+  listMidiDevices,
+  playTestNote,
+  selectMidiDevice,
+  type MidiStatus,
+  type ProjectState,
+} from "./core";
 
 /** Three stacked blocks on a timeline — the shape the whole app is about. */
 const mark = /* html */ `
@@ -78,6 +86,15 @@ function render(root: HTMLElement, state: ProjectState): void {
             aria-label="Global reverb"
           />
         </label>
+      </div>
+      <div class="midi-control" aria-label="MIDI input">
+        <label class="sound-control">
+          <span class="sound-control__label">MIDI input</span>
+          <select class="sound-control__select" data-midi-input aria-label="MIDI input" disabled>
+            <option>Checking MIDI inputs…</option>
+          </select>
+        </label>
+        <p class="midi-control__status" data-midi-status aria-live="polite">Checking MIDI inputs…</p>
       </div>
       <button class="test-note" type="button" data-play-test-note>
         Play test note
@@ -180,6 +197,57 @@ function wireTestNoteButton(root: HTMLElement): void {
   });
 }
 
+function renderMidiStatus(root: HTMLElement, status: MidiStatus): void {
+  const select = root.querySelector<HTMLSelectElement>("[data-midi-input]");
+  const message = root.querySelector<HTMLElement>("[data-midi-status]");
+  if (message) message.textContent = status.message;
+  if (!select) return;
+
+  select.replaceChildren();
+  if (status.devices.length === 0) {
+    const option = new Option("No MIDI input available", "");
+    option.selected = true;
+    select.add(option);
+    select.disabled = true;
+    return;
+  }
+  if (!status.selectedDeviceId) {
+    const option = new Option("Choose a MIDI input…", "");
+    option.disabled = true;
+    option.selected = true;
+    select.add(option);
+  }
+  for (const device of status.devices) {
+    const option = new Option(device.name, device.id, false, device.id === status.selectedDeviceId);
+    select.add(option);
+  }
+  select.disabled = false;
+}
+
+async function refreshMidiDevices(root: HTMLElement): Promise<void> {
+  try {
+    renderMidiStatus(root, await listMidiDevices());
+  } catch (error: unknown) {
+    const status = root.querySelector<HTMLElement>("[data-midi-status]");
+    if (status) status.textContent = `Could not check MIDI inputs: ${String(error)}`;
+  }
+}
+
+function wireMidiPicker(root: HTMLElement): void {
+  root.addEventListener("change", (event) => {
+    const select = event.target as HTMLElement;
+    if (!select.matches("[data-midi-input]")) return;
+    const deviceId = (select as HTMLSelectElement).value;
+    if (!deviceId) return;
+    selectMidiDevice(deviceId)
+      .then((status) => renderMidiStatus(root, status))
+      .catch((error: unknown) => refreshMidiDevices(root).then(() => {
+        const status = root.querySelector<HTMLElement>("[data-midi-status]");
+        if (status) status.textContent = `Could not select MIDI input: ${String(error)}`;
+      }));
+  });
+}
+
 function wireUndoRedoKeys(root: HTMLElement): void {
   window.addEventListener("keydown", (event) => {
     if (!event.metaKey || event.key.toLowerCase() !== "z") return;
@@ -203,7 +271,10 @@ async function main(): Promise<void> {
   wireTempoControls(root);
   wireSoundControls(root);
   wireTestNoteButton(root);
+  wireMidiPicker(root);
   wireUndoRedoKeys(root);
+  await refreshMidiDevices(root);
+  window.setInterval(() => void refreshMidiDevices(root), 1_000);
 }
 
 void main();
