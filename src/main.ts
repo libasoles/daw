@@ -14,6 +14,7 @@
  * the same project state future live and timeline trigger paths will use.
  */
 
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   applyCommand,
   fetchProjectState,
@@ -48,6 +49,22 @@ const ACCORDION = 1;
 let projects: string[] = [];
 let activeProjectName: string | null = null;
 let isNamingProject = false;
+let currentState: ProjectState | null = null;
+let editingBlockId: number | null = null;
+
+/**
+ * A "new project" / "switch project" / "quit" the user asked for while there
+ * are unsaved changes. Set only long enough to show the confirm-discard
+ * overlay (`render`'s one modal, per the spec's "this warning is the
+ * application's only modal dialog") and resolve it; `null` the rest of the
+ * time.
+ */
+type PendingProjectAction = { kind: "new" } | { kind: "open"; name: string } | { kind: "quit" };
+let pendingProjectAction: PendingProjectAction | null = null;
+/** Set only while the inline "name this project" form is standing in for the
+ * unsaved-changes prompt's "Save" choice on a never-saved project, so the
+ * pending action can resume once the name is submitted. */
+let pendingActionAfterNaming: PendingProjectAction | null = null;
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>'"]/g, (character) => `&#${character.charCodeAt(0)};`);
@@ -72,6 +89,7 @@ function takeGrid(state: ProjectState): string {
 }
 
 function render(root: HTMLElement, state: ProjectState): void {
+  currentState = state;
   root.innerHTML = /* html */ `
     <section class="placeholder" data-tauri-drag-region>
       ${mark}
@@ -82,6 +100,7 @@ function render(root: HTMLElement, state: ProjectState): void {
       <section class="project-controls" aria-label="Projects">
         <div class="project-controls__actions">
           <button type="button" data-save-project ${state.is_dirty ? "" : "disabled"}>Save</button>
+          <button type="button" data-new-project>New project</button>
           <span class="project-controls__status">${state.is_dirty ? "Unsaved changes" : "All changes saved"}</span>
         </div>
         ${isNamingProject ? /* html */ `
@@ -195,7 +214,11 @@ function render(root: HTMLElement, state: ProjectState): void {
       </div>
       <aside class="library" aria-label="Library">
         <h2>Library</h2>
-        ${state.blocks.map((block, index) => `<div class="library-block" style="--block-color: ${block.color}"><span data-block-name="${block.id}">${block.name}</span><input data-block-color="${block.id}" type="color" value="${block.color}" /><button type="button" data-delete-block="${block.id}">Delete</button><button type="button" data-play-block="${index}"${state.is_playing ? " disabled" : ""}>Play</button></div>`).join("") || "<span class=\"take-summary take-summary--empty\">no blocks yet</span>"}
+        ${state.blocks.map((block, index) => `<div class="library-block" style="--block-color: ${block.color}">${
+          block.id === editingBlockId
+            ? `<input class="library-block__name-input" data-block-name-input="${block.id}" value="${escapeHtml(block.name)}" aria-label="Block name" />`
+            : `<span data-block-name="${block.id}">${escapeHtml(block.name)}</span>`
+        }<input data-block-color="${block.id}" type="color" value="${block.color}" /><button type="button" data-delete-block="${block.id}">Delete</button><button type="button" data-play-block="${index}"${state.is_playing ? " disabled" : ""}>Play</button></div>`).join("") || "<span class=\"take-summary take-summary--empty\">no blocks yet</span>"}
       </aside>
       <div class="midi-control" aria-label="MIDI input">
         <label class="sound-control">
@@ -211,7 +234,26 @@ function render(root: HTMLElement, state: ProjectState): void {
       </button>
       <p class="placeholder__status" data-audio-status>no project &mdash; nothing to play yet</p>
     </section>
+    ${pendingProjectAction ? /* html */ `
+      <div class="modal-overlay" data-unsaved-changes-overlay>
+        <div class="modal" role="alertdialog" aria-modal="true" aria-label="Unsaved changes">
+          <p>You have unsaved changes. Save them before continuing?</p>
+          <div class="modal__actions">
+            <button type="button" data-unsaved-save>Save</button>
+            <button type="button" data-unsaved-discard>Discard</button>
+            <button type="button" data-unsaved-cancel>Cancel</button>
+          </div>
+        </div>
+      </div>
+    ` : ""}
   `;
+  if (editingBlockId !== null) {
+    const input = root.querySelector<HTMLInputElement>(
+      `[data-block-name-input="${editingBlockId}"]`,
+    );
+    input?.focus();
+    input?.select();
+  }
 }
 
 function clampBpm(bpm: number): number {
@@ -350,21 +392,96 @@ async function saveCurrentProject(root: HTMLElement, name?: string): Promise<voi
   render(root, state);
 }
 
+/**
+ * Runs `action` unconditionally: the caller has already established (via
+ * `requestProjectAction`, or because the user just chose to save/discard)
+ * that it's safe to go ahead.
+ */
+async function proceedWithProjectAction(
+  root: HTMLElement,
+  action: PendingProjectAction,
+): Promise<void> {
+  if (action.kind === "new") {
+    const applied = await applyCommand({ type: "newProject", payload: { force: true } });
+    activeProjectName = null;
+    render(root, applied.state);
+    return;
+  }
+  if (action.kind === "open") {
+    const applied = await openProject(action.name, true);
+    activeProjectName = action.name;
+    render(root, applied.state);
+    return;
+  }
+  // "quit": bypasses `onCloseRequested` entirely, so it can't re-trigger the
+  // warning it was itself raised to resolve.
+  await getCurrentWindow().destroy();
+}
+
+/**
+ * The entry point for "New project", switching projects, and quitting: asks
+ * for confirmation first if there are unsaved changes, per the spec's
+ * warning before discarding work, otherwise proceeds immediately.
+ */
+async function requestProjectAction(
+  root: HTMLElement,
+  action: PendingProjectAction,
+): Promise<void> {
+  const state = currentState ?? (await fetchProjectState());
+  if (!state.is_dirty) {
+    await proceedWithProjectAction(root, action);
+    return;
+  }
+  pendingProjectAction = action;
+  render(root, state);
+}
+
+/** The unsaved-changes prompt's "Save" choice: saves, naming the project
+ * first through the existing inline form if it has never been saved, then
+ * resumes whichever action was pending. */
+async function saveThenProceedWithProjectAction(
+  root: HTMLElement,
+  action: PendingProjectAction,
+): Promise<void> {
+  if (!activeProjectName) {
+    isNamingProject = true;
+    pendingActionAfterNaming = action;
+    render(root, currentState ?? (await fetchProjectState()));
+    root.querySelector<HTMLInputElement>("[data-project-name]")?.focus();
+    return;
+  }
+  await saveCurrentProject(root);
+  await proceedWithProjectAction(root, action);
+}
+
 function wireProjectControls(root: HTMLElement): void {
   root.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
     if (target.closest("[data-save-project]")) void saveCurrentProject(root);
+    if (target.closest("[data-new-project]")) void requestProjectAction(root, { kind: "new" });
     if (target.closest("[data-cancel-project-name]")) {
       isNamingProject = false;
+      pendingActionAfterNaming = null;
       void fetchProjectState().then((state) => render(root, state));
     }
     const open = target.closest<HTMLButtonElement>("[data-open-project]");
     if (open?.dataset.openProject) {
-      openProject(open.dataset.openProject).then((applied) => {
-        activeProjectName = open.dataset.openProject ?? null;
-        isNamingProject = false;
-        render(root, applied.state);
-      });
+      void requestProjectAction(root, { kind: "open", name: open.dataset.openProject });
+    }
+
+    if (target.closest("[data-unsaved-cancel]")) {
+      pendingProjectAction = null;
+      render(root, currentState!);
+    }
+    if (target.closest("[data-unsaved-discard]")) {
+      const action = pendingProjectAction;
+      pendingProjectAction = null;
+      if (action) void proceedWithProjectAction(root, action);
+    }
+    if (target.closest("[data-unsaved-save]")) {
+      const action = pendingProjectAction;
+      pendingProjectAction = null;
+      if (action) void saveThenProceedWithProjectAction(root, action);
     }
   });
 
@@ -373,13 +490,34 @@ function wireProjectControls(root: HTMLElement): void {
     if (!form.matches("[data-project-name-form]")) return;
     event.preventDefault();
     const input = root.querySelector<HTMLInputElement>("[data-project-name]");
-    if (input?.value.trim()) void saveCurrentProject(root, input.value.trim());
+    if (!input?.value.trim()) return;
+    const action = pendingActionAfterNaming;
+    pendingActionAfterNaming = null;
+    void saveCurrentProject(root, input.value.trim()).then(() => {
+      if (action) void proceedWithProjectAction(root, action);
+    });
   });
 
   window.addEventListener("keydown", (event) => {
     if (!event.metaKey || event.key.toLowerCase() !== "s") return;
     event.preventDefault();
     void saveCurrentProject(root);
+  });
+}
+
+/**
+ * Intercepts the window close request per the spec's "quitting with unsaved
+ * changes shows the same warning": with nothing unsaved the window closes
+ * normally, otherwise the close is held open and the same confirm-discard
+ * overlay `requestProjectAction` uses for New/switch project is shown.
+ */
+function wireQuitWarning(root: HTMLElement): void {
+  void getCurrentWindow().onCloseRequested(async (event) => {
+    const state = currentState ?? (await fetchProjectState());
+    if (!state.is_dirty) return;
+    event.preventDefault();
+    pendingProjectAction = { kind: "quit" };
+    render(root, state);
   });
 }
 
@@ -556,8 +694,56 @@ function wireRecordingControls(root: HTMLElement): void {
   root.addEventListener("dblclick", (event) => {
     const name = (event.target as HTMLElement).closest<HTMLElement>("[data-block-name]");
     if (!name) return;
-    const value = window.prompt("Block name", name.textContent ?? "");
-    if (value !== null) void applyCommand({ type: "renameBlock", payload: { id: Number(name.dataset.blockName), name: value } }).then((applied) => render(root, applied.state));
+    editingBlockId = Number(name.dataset.blockName);
+    render(root, currentState!);
+  });
+
+  // Escaping cancels the edit by re-rendering, which removes the focused
+  // input from the DOM and — in every browser — synchronously fires `blur`
+  // on it as a side effect. This flag tells the blur handler below that the
+  // blur is that removal, not the user leaving the field, so it doesn't
+  // commit a rename the user just cancelled.
+  let cancellingBlockNameEdit = false;
+
+  function commitBlockNameEdit(input: HTMLInputElement): void {
+    const id = Number(input.dataset.blockNameInput);
+    const name = input.value.trim();
+    editingBlockId = null;
+    if (!name) {
+      render(root, currentState!);
+      return;
+    }
+    void applyCommand({ type: "renameBlock", payload: { id, name } }).then((applied) =>
+      render(root, applied.state),
+    );
+  }
+
+  root.addEventListener(
+    "blur",
+    (event) => {
+      const input = event.target as HTMLElement;
+      if (!input.matches("[data-block-name-input]")) return;
+      if (cancellingBlockNameEdit) {
+        cancellingBlockNameEdit = false;
+        return;
+      }
+      commitBlockNameEdit(input as HTMLInputElement);
+    },
+    true,
+  );
+
+  root.addEventListener("keydown", (event) => {
+    const input = event.target as HTMLElement;
+    if (!input.matches("[data-block-name-input]")) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      (input as HTMLInputElement).blur();
+    }
+    if (event.key === "Escape") {
+      cancellingBlockNameEdit = true;
+      editingBlockId = null;
+      render(root, currentState!);
+    }
   });
 
   root.addEventListener("change", (event) => {
@@ -601,6 +787,7 @@ async function main(): Promise<void> {
   wireTestNoteButton(root);
   wireMidiPicker(root);
   wireUndoRedoKeys(root);
+  wireQuitWarning(root);
   await refreshMidiDevices(root);
   window.setInterval(() => void refreshMidiDevices(root), 1_000);
 }

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window: the app's own commands plus the core window/event permissions the frontend needs to intercept a close request and warn about unsaved changes (issue #14).",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

@@ -64,7 +64,7 @@ fn new_project_resets_state_to_default() {
     let mut core = DawCore::new();
     core.apply(Command::SetBpm(200));
 
-    let applied = core.apply(Command::NewProject);
+    let applied = core.apply(Command::NewProject { force: true });
 
     assert_eq!(applied.state.bpm, 120);
     assert_eq!(applied.state.time_signature, (3, 4));

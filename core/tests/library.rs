@@ -65,6 +65,29 @@ fn renaming_recolouring_and_deleting_a_block_are_undoable() {
     assert_eq!(restored.state.blocks[0].notes, block.notes);
 }
 
+#[test]
+fn adding_a_quantised_take_to_the_library_resolves_the_quantisation_into_the_block() {
+    let mut core = DawCore::new();
+    core.apply(Command::StopRecording(Some(Take::from_raw_notes(vec![
+        RecordedNote {
+            pitch: 72,
+            velocity: 100,
+            start_pulse: 1,
+            end_pulse: 3,
+        },
+    ]))));
+    core.apply(Command::SetTakeQuantisation(
+        daw_core::Quantisation::Quarter,
+    ));
+
+    let added = core.apply(Command::AddTakeToLibrary);
+
+    assert_eq!(added.state.blocks[0].notes[0].start_pulse, 2);
+    // The take's default trim spans exactly its raw length (0..3), so the
+    // quantised end (4) is clamped back down to the take's own end (3).
+    assert_eq!(added.state.blocks[0].notes[0].end_pulse, 3);
+}
+
 fn record_and_freeze(core: &mut DawCore, pitch: u8) {
     core.apply(Command::StopRecording(Some(Take::from_raw_notes(vec![
         RecordedNote {

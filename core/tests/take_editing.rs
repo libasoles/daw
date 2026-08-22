@@ -95,6 +95,19 @@ fn quantisation_rederives_from_raw_notes_and_composes_with_trim() {
 }
 
 #[test]
+fn quantising_an_untrimmed_take_and_setting_it_back_to_off_restores_the_original_timing_exactly() {
+    let take = recorded_take();
+    let raw_notes = take.raw_notes.clone();
+    let mut core = DawCore::new();
+    core.apply(Command::StopRecording(Some(take)));
+
+    core.apply(Command::SetTakeQuantisation(Quantisation::Whole));
+    let restored = core.apply(Command::SetTakeQuantisation(Quantisation::Off));
+
+    assert_eq!(restored.state.take.unwrap().notes(), raw_notes);
+}
+
+#[test]
 fn eighth_quantisation_uses_a_finer_grid_than_quarter_quantisation() {
     let mut core = DawCore::new();
     core.apply(Command::StopRecording(Some(Take::from_raw_notes(vec![

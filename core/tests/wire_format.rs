@@ -8,8 +8,8 @@ use daw_core::{Applied, Command, Effect, ProjectState, Quantisation, RecordedNot
 #[test]
 fn commands_serialise_as_an_adjacently_tagged_object() {
     assert_eq!(
-        serde_json::to_value(Command::NewProject).unwrap(),
-        serde_json::json!({ "type": "newProject" })
+        serde_json::to_value(Command::NewProject { force: false }).unwrap(),
+        serde_json::json!({ "type": "newProject", "payload": { "force": false } })
     );
     assert_eq!(
         serde_json::to_value(Command::SetBpm(140)).unwrap(),
@@ -171,5 +171,9 @@ fn effects_that_carry_a_take_serialise_the_take_inline() {
     assert_eq!(
         serde_json::to_value(Effect::ConfirmOverwriteRecording).unwrap(),
         serde_json::json!({ "type": "confirmOverwriteRecording" })
+    );
+    assert_eq!(
+        serde_json::to_value(Effect::ConfirmDiscardUnsavedChanges).unwrap(),
+        serde_json::json!({ "type": "confirmDiscardUnsavedChanges" })
     );
 }

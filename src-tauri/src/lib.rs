@@ -82,12 +82,28 @@ fn apply_command(app: AppHandle, command: Command) -> Applied {
 /// the shell — not the webview — is responsible for.
 fn dispatch(app: &AppHandle, command: Command) -> Applied {
     let starting_recording = matches!(command, Command::StartRecording { .. });
+    let opening_new_project = matches!(command, Command::NewProject { .. });
 
     let applied = {
         let core = app.state::<Mutex<DawCore>>();
         let mut core = core.lock().expect("DawCore mutex poisoned");
         core.apply(command)
     };
+    let refused = applied
+        .effects
+        .contains(&Effect::ConfirmDiscardUnsavedChanges);
+
+    // A new project has no name yet; forget whatever name the previous
+    // project was saved under, so the next save asks again rather than
+    // silently overwriting it. Only when the core actually went ahead —
+    // a refused (unsaved-changes-gated) `NewProject` leaves the current
+    // project, and its name, untouched.
+    if opening_new_project && !refused {
+        *app.state::<CurrentProjectName>()
+            .0
+            .lock()
+            .expect("project name mutex poisoned") = None;
+    }
 
     sync_audio_engine(app, &applied.state, applied.state.metronome_enabled);
 
@@ -243,8 +259,14 @@ fn list_projects(app: AppHandle) -> Result<Vec<String>, String> {
         .list()
 }
 
+/// Reads and opens a saved project. Gated by unsaved changes exactly like
+/// `Command::OpenProject` itself: with `force: false` and a dirty current
+/// project, the core refuses (reporting `Effect::ConfirmDiscardUnsavedChanges`
+/// in the returned `Applied`) and this leaves `CurrentProjectName` untouched,
+/// so a refused open never makes the shell think a different project is
+/// active.
 #[tauri::command]
-fn open_project(app: AppHandle, name: String) -> Result<Applied, String> {
+fn open_project(app: AppHandle, name: String, force: bool) -> Result<Applied, String> {
     let document = app
         .state::<ProjectStorage>()
         .0
@@ -254,11 +276,22 @@ fn open_project(app: AppHandle, name: String) -> Result<Applied, String> {
         .ok_or_else(|| format!("project '{name}' was not found"))?;
     let project = serde_json::from_str(&document)
         .map_err(|error| format!("could not read project '{name}': {error}"))?;
-    let applied = dispatch(&app, Command::OpenProject(project));
-    *app.state::<CurrentProjectName>()
-        .0
-        .lock()
-        .expect("project name mutex poisoned") = Some(name);
+    let applied = dispatch(
+        &app,
+        Command::OpenProject {
+            document: project,
+            force,
+        },
+    );
+    if !applied
+        .effects
+        .contains(&Effect::ConfirmDiscardUnsavedChanges)
+    {
+        *app.state::<CurrentProjectName>()
+            .0
+            .lock()
+            .expect("project name mutex poisoned") = Some(name);
+    }
     Ok(applied)
 }
 

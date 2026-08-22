@@ -33,7 +33,10 @@ fn opening_a_saved_project_restores_every_setting_and_every_block() {
     let saved_document = core.project_document();
 
     let mut reopened = DawCore::new();
-    reopened.apply(Command::OpenProject(saved_document.clone()));
+    reopened.apply(Command::OpenProject {
+        document: saved_document.clone(),
+        force: true,
+    });
 
     assert_eq!(reopened.state(), &saved_document);
     assert!(!reopened.state().is_dirty);

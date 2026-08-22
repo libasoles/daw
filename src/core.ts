@@ -49,7 +49,7 @@ export interface ProjectState {
 }
 
 export type Command =
-  | { type: "newProject" }
+  | { type: "newProject"; payload: { force: boolean } }
   | { type: "setBpm"; payload: number }
   | {
       type: "setTimeSignature";
@@ -76,6 +76,7 @@ export type Effect =
   | { type: "nothingToRedo" }
   | { type: "noMidiDeviceAvailable" }
   | { type: "confirmOverwriteRecording" }
+  | { type: "confirmDiscardUnsavedChanges" }
   | ({ type: "playSchedule" } & Take);
 
 export interface Applied {
@@ -102,8 +103,8 @@ export function listProjects(): Promise<string[]> {
   return invoke<string[]>("list_projects");
 }
 
-export function openProject(name: string): Promise<Applied> {
-  return invoke<Applied>("open_project", { name });
+export function openProject(name: string, force = false): Promise<Applied> {
+  return invoke<Applied>("open_project", { name, force });
 }
 
 /**

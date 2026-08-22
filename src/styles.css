@@ -426,6 +426,58 @@ body {
 .library { display: grid; gap: var(--space-1); }
 .library h2 { margin: 0; font-size: var(--text-sm); color: var(--ink-dim); }
 .library-block { border-left: 4px solid var(--block-color); padding: var(--space-1) var(--space-2); background: var(--surface-raised); }
+.library-block__name-input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface-base);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 0 var(--space-1);
+}
+
+/* --- The app's one modal dialog (issue #14): warns before discarding
+   unsaved work on a new project, a project switch, or quit. ------------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 10;
+}
+
+.modal {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  max-width: 26rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-size: var(--text-sm);
+}
+
+.modal__actions {
+  display: flex;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
+
+.modal__actions button {
+  font: inherit;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-base);
+  color: var(--ink);
+}
+
+.modal__actions button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 
 /* --- Native MIDI input picker (issue #6). ------------------------------ */
 

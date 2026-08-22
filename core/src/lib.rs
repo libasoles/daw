@@ -277,12 +277,27 @@ impl Default for ProjectState {
 #[serde(tag = "type", content = "payload", rename_all = "camelCase")]
 pub enum Command {
     /// Opens a new, empty project. Not itself undoable: it resets the state
-    /// wholesale and clears the undo/redo history, the same capability a
-    /// later "switch projects" ticket will reuse.
-    NewProject,
-    /// Replaces the current project with a document the shell read through
-    /// its storage port. Opening never enters undo history.
-    OpenProject(ProjectState),
+    /// wholesale and clears the undo/redo history.
+    ///
+    /// If the current project has unsaved changes and `force` is `false`,
+    /// this reports [`Effect::ConfirmDiscardUnsavedChanges`] and leaves the
+    /// project untouched, per the spec's warning before discarding work.
+    /// Resending with `force: true` (after the shell has confirmed with the
+    /// user, or saved on their behalf) proceeds unconditionally.
+    NewProject {
+        force: bool,
+    },
+    /// Replaces the current project with `document`, read by the shell
+    /// through its storage port. Opening never enters undo history.
+    ///
+    /// Gated by unsaved changes exactly like [`Command::NewProject`]: with
+    /// `force: false` and a dirty project, this reports
+    /// [`Effect::ConfirmDiscardUnsavedChanges`] and leaves the current
+    /// project untouched.
+    OpenProject {
+        document: ProjectState,
+        force: bool,
+    },
     /// Records that the shell successfully wrote the current document. This
     /// is not undoable: it changes the save baseline, not musical content.
     ProjectSaved,
@@ -376,6 +391,11 @@ pub enum Effect {
     /// area already held a take. The shell should ask the user to confirm,
     /// then resend `StartRecording { force: true }` if they agree.
     ConfirmOverwriteRecording,
+    /// `NewProject { force: false }` or `OpenProject { force: false, .. }`
+    /// was applied against a project with unsaved changes. The shell should
+    /// offer to save, discard or cancel, then resend the same command with
+    /// `force: true` if the user chooses to save or discard.
+    ConfirmDiscardUnsavedChanges,
     /// `PlayTake` was applied with a take present: the shell should turn
     /// this into real audio and, once it has finished sounding, apply
     /// `PlaybackFinished`.
@@ -454,20 +474,31 @@ impl DawCore {
     /// project state and any effects come out. Performs no I/O.
     pub fn apply(&mut self, command: Command) -> Applied {
         let effects = match command {
-            Command::NewProject => {
-                self.state = ProjectState::default();
-                self.saved_state = None;
-                self.clear_history();
-                Vec::new()
+            Command::NewProject { force } => {
+                if self.state.is_dirty && !force {
+                    vec![Effect::ConfirmDiscardUnsavedChanges]
+                } else {
+                    self.state = ProjectState::default();
+                    self.saved_state = None;
+                    self.clear_history();
+                    Vec::new()
+                }
             }
-            Command::OpenProject(mut state) => {
-                state.is_recording = false;
-                state.is_playing = false;
-                state.is_dirty = false;
-                self.state = state.clone();
-                self.saved_state = Some(state);
-                self.clear_history();
-                Vec::new()
+            Command::OpenProject {
+                document: mut state,
+                force,
+            } => {
+                if self.state.is_dirty && !force {
+                    vec![Effect::ConfirmDiscardUnsavedChanges]
+                } else {
+                    state.is_recording = false;
+                    state.is_playing = false;
+                    state.is_dirty = false;
+                    self.state = state.clone();
+                    self.saved_state = Some(state);
+                    self.clear_history();
+                    Vec::new()
+                }
             }
             Command::ProjectSaved => {
                 self.saved_state = Some(Self::document_state(&self.state));
@@ -752,8 +783,8 @@ impl DawCore {
             | Command::PlayTake
             | Command::PlayBlock(_)
             | Command::PlaybackFinished
-            | Command::NewProject
-            | Command::OpenProject(_)
+            | Command::NewProject { .. }
+            | Command::OpenProject { .. }
             | Command::ProjectSaved
             | Command::Undo
             | Command::Redo => {}
