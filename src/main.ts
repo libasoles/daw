@@ -373,32 +373,25 @@ async function saveCurrentProject(root: HTMLElement, name?: string): Promise<voi
   render(root, state);
 }
 
-async function performProjectAction(root: HTMLElement, action: PendingProjectAction): Promise<void> {
-  if (action.type === "quit") {
-    await finishClose();
-    return;
-  }
-  if (action.type === "new") {
-    activeProjectName = null;
-    isNamingProject = false;
-    const applied = await applyCommand({ type: "newProject" });
+async function requestProjectAction(root: HTMLElement, action: PendingProjectAction): Promise<void> {
+  const applied = action.type === "new"
+    ? await applyCommand({ type: "requestNewProject" })
+    : action.type === "quit"
+      ? await applyCommand({ type: "requestQuit" })
+      : await openProject(action.name);
+  if (applied.effects.some((effect) => effect.type === "confirmDiscardProjectChanges")) {
+    pendingProjectAction = action;
+    pendingSaveNeedsName = false;
     render(root, applied.state);
     return;
   }
-  const applied = await openProject(action.name);
-  activeProjectName = action.name;
-  isNamingProject = false;
-  render(root, applied.state);
-}
-
-function requestProjectAction(root: HTMLElement, action: PendingProjectAction): void {
-  if (renderedProjectState?.is_dirty) {
-    pendingProjectAction = action;
-    pendingSaveNeedsName = false;
-    render(root, renderedProjectState);
+  if (applied.effects.some((effect) => effect.type === "quitApplication")) {
+    await finishClose();
     return;
   }
-  void performProjectAction(root, action);
+  if (action.type === "new") activeProjectName = null;
+  if (action.type === "open") activeProjectName = action.name;
+  render(root, applied.state);
 }
 
 async function savePendingProjectAction(root: HTMLElement): Promise<void> {
@@ -418,28 +411,49 @@ async function savePendingProjectAction(root: HTMLElement): Promise<void> {
   projects = await listProjects();
   pendingProjectAction = null;
   pendingSaveNeedsName = false;
-  await performProjectAction(root, action);
+  const resolved = await applyCommand({ type: "resolveProjectChange", payload: "proceed" });
+  if (resolved.effects.some((effect) => effect.type === "quitApplication")) {
+    await finishClose();
+    return;
+  }
+  if (action.type === "new") activeProjectName = null;
+  if (action.type === "open") {
+    activeProjectName = action.name;
+    render(root, (await openProject(action.name)).state);
+    return;
+  }
+  render(root, resolved.state);
 }
 
 function wireProjectControls(root: HTMLElement): void {
   root.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
     if (target.closest("[data-save-project]")) void saveCurrentProject(root);
-    if (target.closest("[data-new-project]")) requestProjectAction(root, { type: "new" });
+    if (target.closest("[data-new-project]")) void requestProjectAction(root, { type: "new" });
     if (target.closest("[data-cancel-project-name]")) {
       isNamingProject = false;
       void fetchProjectState().then((state) => render(root, state));
     }
     const open = target.closest<HTMLButtonElement>("[data-open-project]");
-    if (open?.dataset.openProject) requestProjectAction(root, { type: "open", name: open.dataset.openProject });
+    if (open?.dataset.openProject) void requestProjectAction(root, { type: "open", name: open.dataset.openProject });
     if (target.closest("[data-save-pending]")) void savePendingProjectAction(root);
     if (target.closest("[data-discard-pending]") && pendingProjectAction) {
       const action = pendingProjectAction;
       pendingProjectAction = null;
       pendingSaveNeedsName = false;
-      void performProjectAction(root, action);
+      void applyCommand({ type: "resolveProjectChange", payload: "proceed" }).then(async (applied) => {
+        if (applied.effects.some((effect) => effect.type === "quitApplication")) return finishClose();
+        if (action.type === "new") activeProjectName = null;
+        if (action.type === "open") {
+          activeProjectName = action.name;
+          render(root, (await openProject(action.name)).state);
+          return;
+        }
+        render(root, applied.state);
+      });
     }
     if (target.closest("[data-cancel-pending]")) {
+      void applyCommand({ type: "resolveProjectChange", payload: "cancel" });
       pendingProjectAction = null;
       pendingSaveNeedsName = false;
       if (renderedProjectState) render(root, renderedProjectState);
@@ -455,6 +469,7 @@ function wireProjectControls(root: HTMLElement): void {
   });
 
   window.addEventListener("keydown", (event) => {
+    if (pendingProjectAction) return;
     if (!event.metaKey || event.key.toLowerCase() !== "s") return;
     event.preventDefault();
     void saveCurrentProject(root);

@@ -1,4 +1,6 @@
-use daw_core::{ports::MemoryStorage, ports::Storage, Command, DawCore, Effect};
+use daw_core::{
+    ports::MemoryStorage, ports::Storage, Command, DawCore, Effect, ProjectChangeResolution,
+};
 
 #[test]
 fn dirty_state_tracks_manual_saves_and_undoes() {
@@ -79,6 +81,35 @@ fn changing_projects_empties_work_or_loads_it_and_clears_undo_history() {
     let document = saved.project_document();
     let opened = core.apply(Command::OpenProject(document));
     assert_eq!(opened.state.bpm, 90);
+    assert_eq!(
+        core.apply(Command::Undo).effects,
+        vec![Effect::NothingToUndo]
+    );
+}
+
+#[test]
+fn dirty_project_changes_wait_for_a_proceed_or_cancel_resolution() {
+    let mut core = DawCore::new();
+    core.apply(Command::ProjectSaved(core.project_document()));
+    core.apply(Command::SetBpm(140));
+
+    let requested = core.apply(Command::RequestNewProject);
+    assert_eq!(requested.state.bpm, 140);
+    assert_eq!(
+        requested.effects,
+        vec![Effect::ConfirmDiscardProjectChanges]
+    );
+    core.apply(Command::ResolveProjectChange(
+        ProjectChangeResolution::Cancel,
+    ));
+    assert_eq!(core.state().bpm, 140);
+
+    core.apply(Command::RequestNewProject);
+    let changed = core.apply(Command::ResolveProjectChange(
+        ProjectChangeResolution::Proceed,
+    ));
+    assert!(changed.state.take.is_none());
+    assert!(changed.state.blocks.is_empty());
     assert_eq!(
         core.apply(Command::Undo).effects,
         vec![Effect::NothingToUndo]

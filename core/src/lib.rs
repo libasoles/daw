@@ -280,9 +280,19 @@ pub enum Command {
     /// wholesale and clears the undo/redo history, the same capability a
     /// later "switch projects" ticket will reuse.
     NewProject,
+    /// Requests a fresh project. Dirty work yields a confirmation effect
+    /// rather than discarding anything until the shell resolves it.
+    RequestNewProject,
     /// Replaces the current project with a document the shell read through
     /// its storage port. Opening never enters undo history.
     OpenProject(ProjectState),
+    /// Requests opening a document the shell has already read through its
+    /// storage adapter. Dirty work yields a confirmation effect first.
+    RequestOpenProject(ProjectState),
+    /// Requests application quit through the same dirty-project policy.
+    RequestQuit,
+    /// Resolves the most recently requested project change.
+    ResolveProjectChange(ProjectChangeResolution),
     /// Requests a manual save under an application-owned project name. The
     /// core emits [`Effect::SaveProject`] for the shell's storage adapter.
     SaveProject(String),
@@ -357,6 +367,13 @@ pub enum Command {
     Redo,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectChangeResolution {
+    Proceed,
+    Cancel,
+}
+
 /// What the core asks the shell to do rather than doing itself, or reports
 /// back about a command it could not usefully act on. The core performs no
 /// I/O of its own — this is the only channel out.
@@ -379,6 +396,10 @@ pub enum Effect {
     /// area already held a take. The shell should ask the user to confirm,
     /// then resend `StartRecording { force: true }` if they agree.
     ConfirmOverwriteRecording,
+    /// The shell should show the single unsaved-project decision.
+    ConfirmDiscardProjectChanges,
+    /// The shell may now close the application.
+    QuitApplication,
     /// The shell should persist this durable project document under `name`.
     /// It must report success by applying [`Command::ProjectSaved`].
     SaveProject {
@@ -404,6 +425,13 @@ struct LoggedCommand {
     inverse: Command,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum PendingProjectChange {
+    New,
+    Open(ProjectState),
+    Quit,
+}
+
 /// The result of applying a [`Command`]: the resulting project state and any
 /// effects for the shell to carry out.
 ///
@@ -427,6 +455,7 @@ pub struct DawCore {
     saved_state: Option<ProjectState>,
     undo_log: VecDeque<LoggedCommand>,
     redo_log: Vec<LoggedCommand>,
+    pending_project_change: Option<PendingProjectChange>,
 }
 
 impl Default for DawCore {
@@ -436,6 +465,7 @@ impl Default for DawCore {
             saved_state: None,
             undo_log: VecDeque::new(),
             redo_log: Vec::new(),
+            pending_project_change: None,
         };
         core.sync_dirty_state();
         core
@@ -463,20 +493,23 @@ impl DawCore {
     /// project state and any effects come out. Performs no I/O.
     pub fn apply(&mut self, command: Command) -> Applied {
         let effects = match command {
-            Command::NewProject => {
-                self.state = ProjectState::default();
-                self.saved_state = None;
-                self.clear_history();
-                Vec::new()
+            Command::NewProject => self.apply_project_change(PendingProjectChange::New),
+            Command::RequestNewProject => self.request_project_change(PendingProjectChange::New),
+            Command::OpenProject(state) => {
+                self.apply_project_change(PendingProjectChange::Open(state))
             }
-            Command::OpenProject(mut state) => {
-                state.is_recording = false;
-                state.is_playing = false;
-                state.is_dirty = false;
-                self.state = state.clone();
-                self.saved_state = Some(state);
-                self.clear_history();
-                Vec::new()
+            Command::RequestOpenProject(state) => {
+                self.request_project_change(PendingProjectChange::Open(state))
+            }
+            Command::RequestQuit => self.request_project_change(PendingProjectChange::Quit),
+            Command::ResolveProjectChange(resolution) => {
+                let pending = self.pending_project_change.take();
+                match (resolution, pending) {
+                    (ProjectChangeResolution::Proceed, Some(change)) => {
+                        self.apply_project_change(change)
+                    }
+                    _ => Vec::new(),
+                }
             }
             Command::SaveProject(name) => vec![Effect::SaveProject {
                 name,
@@ -764,7 +797,11 @@ impl DawCore {
             | Command::PlayBlock(_)
             | Command::PlaybackFinished
             | Command::NewProject
+            | Command::RequestNewProject
             | Command::OpenProject(_)
+            | Command::RequestOpenProject(_)
+            | Command::RequestQuit
+            | Command::ResolveProjectChange(_)
             | Command::SaveProject(_)
             | Command::ProjectSaved(_)
             | Command::Undo
@@ -789,6 +826,37 @@ impl DawCore {
             .saved_state
             .as_ref()
             .is_none_or(|saved| document != *saved);
+    }
+
+    fn request_project_change(&mut self, change: PendingProjectChange) -> Vec<Effect> {
+        if self.state.is_dirty {
+            self.pending_project_change = Some(change);
+            vec![Effect::ConfirmDiscardProjectChanges]
+        } else {
+            self.apply_project_change(change)
+        }
+    }
+
+    fn apply_project_change(&mut self, change: PendingProjectChange) -> Vec<Effect> {
+        self.pending_project_change = None;
+        match change {
+            PendingProjectChange::New => {
+                self.state = ProjectState::default();
+                self.saved_state = None;
+                self.clear_history();
+                Vec::new()
+            }
+            PendingProjectChange::Open(mut state) => {
+                state.is_recording = false;
+                state.is_playing = false;
+                state.is_dirty = false;
+                self.state = state.clone();
+                self.saved_state = Some(state);
+                self.clear_history();
+                Vec::new()
+            }
+            PendingProjectChange::Quit => vec![Effect::QuitApplication],
+        }
     }
 }
 

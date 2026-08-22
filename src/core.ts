@@ -50,6 +50,9 @@ export interface ProjectState {
 
 export type Command =
   | { type: "newProject" }
+  | { type: "requestNewProject" }
+  | { type: "requestQuit" }
+  | { type: "resolveProjectChange"; payload: "proceed" | "cancel" }
   | { type: "setBpm"; payload: number }
   | {
       type: "setTimeSignature";
@@ -76,6 +79,8 @@ export type Effect =
   | { type: "nothingToRedo" }
   | { type: "noMidiDeviceAvailable" }
   | { type: "confirmOverwriteRecording" }
+  | { type: "confirmDiscardProjectChanges" }
+  | { type: "quitApplication" }
   | { type: "saveProject"; name: string; document: ProjectState }
   | ({ type: "playSchedule" } & Take);
 

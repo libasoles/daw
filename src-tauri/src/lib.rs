@@ -264,11 +264,17 @@ fn open_project(app: AppHandle, name: String) -> Result<Applied, String> {
         .ok_or_else(|| format!("project '{name}' was not found"))?;
     let project = serde_json::from_str(&document)
         .map_err(|error| format!("could not read project '{name}': {error}"))?;
-    let applied = dispatch(&app, Command::OpenProject(project));
-    *app.state::<CurrentProjectName>()
-        .0
-        .lock()
-        .expect("project name mutex poisoned") = Some(name);
+    let applied = dispatch(&app, Command::RequestOpenProject(project));
+    if !applied
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::ConfirmDiscardProjectChanges))
+    {
+        *app.state::<CurrentProjectName>()
+            .0
+            .lock()
+            .expect("project name mutex poisoned") = Some(name);
+    }
     Ok(applied)
 }
 
@@ -398,12 +404,11 @@ pub fn run() {
                 *allow_close = false;
                 return;
             }
-            let core = window.state::<Mutex<DawCore>>();
-            if core
-                .lock()
-                .expect("DawCore mutex poisoned")
-                .state()
-                .is_dirty
+            let applied = dispatch(window.app_handle(), Command::RequestQuit);
+            if applied
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::ConfirmDiscardProjectChanges))
             {
                 api.prevent_close();
                 let _ = window.emit("confirm-close", ());
