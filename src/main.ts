@@ -194,7 +194,10 @@ function timelinePlayhead(state: ProjectState): string {
   const pxPerPulse = TIMELINE_ZOOM_PX_PER_PULSE[timelineZoom];
   const distance = timelineTotalPulses(state) * pxPerPulse;
   const durationMs = pulseElapsedMs(timelineTotalPulses(state), state.bpm);
-  return `<div class="timeline-playhead" style="--playhead-distance: ${distance}px; animation-duration: ${durationMs}ms;" aria-hidden="true"></div>`;
+  // Looping (issue #19) repeats the same sweep indefinitely rather than
+  // holding at the end of one pass.
+  const iterationCount = state.loop_enabled ? "infinite" : "1";
+  return `<div class="timeline-playhead" style="--playhead-distance: ${distance}px; animation-duration: ${durationMs}ms; animation-iteration-count: ${iterationCount};" aria-hidden="true"></div>`;
 }
 
 function render(root: HTMLElement, state: ProjectState): void {
@@ -345,6 +348,10 @@ function render(root: HTMLElement, state: ProjectState): void {
           >
             ${state.is_playing && timelinePlaybackActive ? "Stop (Space)" : "Play timeline (Space)"}
           </button>
+          <label class="pulse-toggle">
+            <input type="checkbox" data-loop-enabled${state.loop_enabled ? " checked" : ""} />
+            <span>Loop</span>
+          </label>
           <div class="timeline__zoom" role="group" aria-label="Timeline zoom">
             <button type="button" data-timeline-zoom="overview" aria-pressed="${timelineZoom === "overview"}">Overview</button>
             <button type="button" data-timeline-zoom="normal" aria-pressed="${timelineZoom === "normal"}">Normal</button>
@@ -501,12 +508,16 @@ function schedulePlaybackRefresh(root: HTMLElement, totalPulses: number, bpm: nu
   const durationMs = pulseElapsedMs(totalPulses, bpm);
   window.setTimeout(() => {
     void fetchProjectState().then((state) => {
-      // A newer playback may have started in the meantime; only settle if
-      // this is still the one that finished.
       if (!state.is_playing) {
         timelinePlaybackActive = false;
         render(root, state);
+        return;
       }
+      // Still playing: either a loop (issue #19) carried the same pass
+      // into another lap, or a newer playback with the same duration
+      // started in the meantime. Either way, keep checking at the same
+      // cadence rather than assuming this pass is the one still running.
+      schedulePlaybackRefresh(root, totalPulses, bpm);
     });
   }, durationMs + 50);
 }
@@ -779,6 +790,14 @@ function wireTimelineControls(root: HTMLElement): void {
         void playTimeline(root);
       }
     }
+  });
+
+  root.addEventListener("change", (event) => {
+    const input = event.target as HTMLInputElement;
+    if (!input.matches("[data-loop-enabled]")) return;
+    void applyCommand({ type: "setLoopEnabled", payload: input.checked }).then((applied) =>
+      render(root, applied.state),
+    );
   });
 
   window.addEventListener("keydown", (event) => {

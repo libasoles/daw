@@ -58,6 +58,7 @@ export interface ProjectState {
   next_block_id: number;
   placements: Placement[];
   next_placement_id: number;
+  loop_enabled: boolean;
   is_recording: boolean;
   is_playing: boolean;
 }
@@ -73,6 +74,7 @@ export type Command =
   | { type: "setReverb"; payload: number }
   | { type: "setMetronomeEnabled"; payload: boolean }
   | { type: "setCountInEnabled"; payload: boolean }
+  | { type: "setLoopEnabled"; payload: boolean }
   | { type: "startRecording"; payload: { force: boolean } }
   | { type: "setTakeTrim"; payload: { start_pulse: number; end_pulse: number } }
   | { type: "setTakeQuantisation"; payload: Quantisation }

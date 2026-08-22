@@ -43,6 +43,10 @@ fn commands_serialise_as_an_adjacently_tagged_object() {
         serde_json::json!({ "type": "setCountInEnabled", "payload": false })
     );
     assert_eq!(
+        serde_json::to_value(Command::SetLoopEnabled(true)).unwrap(),
+        serde_json::json!({ "type": "setLoopEnabled", "payload": true })
+    );
+    assert_eq!(
         serde_json::to_value(Command::StartRecording { force: false }).unwrap(),
         serde_json::json!({ "type": "startRecording", "payload": { "force": false } })
     );
@@ -135,6 +139,7 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
             next_block_id: 1,
             placements: Vec::new(),
             next_placement_id: 1,
+            loop_enabled: false,
             is_recording: false,
             is_playing: false,
         },
@@ -157,6 +162,7 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
                 "next_block_id": 1,
                 "placements": [],
                 "next_placement_id": 1,
+                "loop_enabled": false,
                 "is_recording": false,
                 "is_playing": false
             },

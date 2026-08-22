@@ -28,6 +28,12 @@ pub enum EngineCommand {
         bpm: u16,
         time_signature: (u8, u8),
         metronome_enabled: bool,
+        /// Whether a *loopable* active schedule (see [`Self::PlaySchedule`])
+        /// restarts from its own beginning on reaching its end (issue #19),
+        /// rather than stopping there. A global synth-thread setting, read
+        /// fresh every time a schedule would otherwise end, so toggling it
+        /// mid-playback takes effect on the current pass, per the spec.
+        loop_enabled: bool,
     },
     NoteOn {
         pitch: u8,
@@ -42,7 +48,14 @@ pub enum EngineCommand {
     /// sends the lot at once. Firing them at the right frame is the synth
     /// thread's job — see its per-sample loop, which already derives "what
     /// pulse is this frame" for the metronome and reuses that math here.
-    PlaySchedule(Vec<ScheduledEvent>),
+    ///
+    /// `loopable` is per-schedule, not global: only timeline playback
+    /// (issue #19) may loop, never an isolated take or block, whatever
+    /// `Configure`'s `loop_enabled` is currently set to.
+    PlaySchedule {
+        events: Vec<ScheduledEvent>,
+        loopable: bool,
+    },
     /// Stops whatever schedule is currently playing (issue #18's "`Space`
     /// stops playback"): silences every note the schedule turned on but
     /// hadn't yet turned off — the same cleanup a fresh `PlaySchedule`
@@ -53,6 +66,7 @@ pub enum EngineCommand {
 
 /// One note on/off to fire at a given pulse, relative to whenever the
 /// schedule carrying it started playing. See [`EngineCommand::PlaySchedule`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScheduledEvent {
     pub at_pulse: u64,
     pub pitch: u8,
@@ -61,12 +75,57 @@ pub struct ScheduledEvent {
 }
 
 /// A schedule the synth thread is actively working through: the events,
-/// sorted by `at_pulse`, the render-frame they started at (pulse zero), and
-/// how far through the list it has gotten.
+/// sorted by `at_pulse`, the render-frame it started at (pulse zero), how
+/// far through the list it has gotten, and whether it's allowed to loop
+/// (issue #19) — only ever true for timeline playback, never an isolated
+/// take or block, regardless of the global loop toggle.
 struct ActiveSchedule {
     events: Vec<ScheduledEvent>,
     started_at_frame: u64,
     next_index: usize,
+    loopable: bool,
+}
+
+/// Advances `active` to `pulse` — its own running position, computed by the
+/// caller from `rendered_frames - active.started_at_frame` — returning
+/// every event now due to fire, in the order they should be sent to the
+/// synth. If the schedule has reached its end, either wraps it back to the
+/// beginning in place (when `loop_enabled` and `active.loopable`, resetting
+/// `started_at_frame` to `current_frame` so the next call starts a fresh
+/// pass with nothing dropped or duplicated at the seam) or reports it as
+/// finished, leaving the caller to drop it.
+///
+/// A pure, hardware-free step function on purpose: it's the whole of what
+/// "loop the timeline" (issue #19) actually decides, extracted from the
+/// real-time render loop below so the note stream across a loop boundary
+/// can be asserted directly — see this module's tests.
+fn advance_schedule(
+    active: &mut ActiveSchedule,
+    pulse: u64,
+    current_frame: u64,
+    loop_enabled: bool,
+) -> (Vec<ScheduledEvent>, bool) {
+    let mut fired = Vec::new();
+    while active
+        .events
+        .get(active.next_index)
+        .is_some_and(|event| event.at_pulse <= pulse)
+    {
+        fired.push(active.events[active.next_index].clone());
+        active.next_index += 1;
+    }
+
+    let finished = if active.next_index < active.events.len() {
+        false
+    } else if loop_enabled && active.loopable {
+        active.next_index = 0;
+        active.started_at_frame = current_frame;
+        false
+    } else {
+        true
+    };
+
+    (fired, finished)
 }
 
 /// Interleaved stereo samples buffered between the synth thread and the
@@ -240,14 +299,18 @@ impl AudioEngine {
     }
 
     /// Requests that the synth thread play `events` back, timed against its
-    /// own running pulse clock rather than the caller's. Non-blocking; see
-    /// [`Self::note_on`].
+    /// own running pulse clock rather than the caller's. `loopable` marks
+    /// whether this particular schedule may restart from its own beginning
+    /// (issue #19) when `Configure`'s `loop_enabled` is on — only ever true
+    /// for timeline playback, never an isolated take or block. Non-blocking;
+    /// see [`Self::note_on`].
     pub fn play_schedule(
         &mut self,
         events: Vec<ScheduledEvent>,
+        loopable: bool,
     ) -> Result<(), EngineCommandDropped> {
         self.commands
-            .push(EngineCommand::PlaySchedule(events))
+            .push(EngineCommand::PlaySchedule { events, loopable })
             .map_err(|_| EngineCommandDropped)
     }
 
@@ -269,6 +332,7 @@ impl AudioEngine {
         bpm: u16,
         time_signature: (u8, u8),
         metronome_enabled: bool,
+        loop_enabled: bool,
     ) -> Result<(), EngineCommandDropped> {
         self.commands
             .push(EngineCommand::Configure {
@@ -277,6 +341,7 @@ impl AudioEngine {
                 bpm,
                 time_signature,
                 metronome_enabled,
+                loop_enabled,
             })
             .map_err(|_| EngineCommandDropped)
     }
@@ -310,6 +375,7 @@ fn spawn_synth_thread(
         let mut bpm = 120;
         let mut time_signature = (3, 4);
         let mut metronome_enabled = false;
+        let mut loop_enabled = false;
         let mut last_metronome_pulse = None;
         let mut rendered_frames = 0u64;
         let mut click_frames_remaining = 0usize;
@@ -327,6 +393,7 @@ fn spawn_synth_thread(
                         bpm: next_bpm,
                         time_signature: next_time_signature,
                         metronome_enabled: next_metronome_enabled,
+                        loop_enabled: next_loop_enabled,
                     } => {
                         instrument = next_instrument;
                         synth.set_reverb(reverb);
@@ -337,6 +404,7 @@ fn spawn_synth_thread(
                         metronome_enabled = next_metronome_enabled;
                         bpm = next_bpm;
                         time_signature = next_time_signature;
+                        loop_enabled = next_loop_enabled;
                     }
                     EngineCommand::NoteOn {
                         pitch,
@@ -352,7 +420,10 @@ fn spawn_synth_thread(
                         }
                     }
                     EngineCommand::NoteOff { pitch } => synth.note_off(instrument, pitch, 0),
-                    EngineCommand::PlaySchedule(mut events) => {
+                    EngineCommand::PlaySchedule {
+                        mut events,
+                        loopable,
+                    } => {
                         // A new schedule pre-empts whatever the previous one
                         // left sounding, so a fast re-trigger can never
                         // strand a note on.
@@ -364,6 +435,7 @@ fn spawn_synth_thread(
                             events,
                             started_at_frame: rendered_frames,
                             next_index: 0,
+                            loopable,
                         });
                     }
                     EngineCommand::StopSchedule => {
@@ -385,12 +457,9 @@ fn spawn_synth_thread(
                     let elapsed_frames = rendered_frames - active.started_at_frame;
                     let pulse = elapsed_frames.saturating_mul(u64::from(bpm) * PULSES_PER_BEAT)
                         / (u64::from(sample_rate) * 60);
-                    while active
-                        .events
-                        .get(active.next_index)
-                        .is_some_and(|event| event.at_pulse <= pulse)
-                    {
-                        let event = &active.events[active.next_index];
+                    let (fired, finished) =
+                        advance_schedule(active, pulse, rendered_frames, loop_enabled);
+                    for event in fired {
                         if event.is_on {
                             synth.note_on(instrument, event.pitch, event.velocity, pulse);
                             held_from_schedule.push(event.pitch);
@@ -398,9 +467,8 @@ fn spawn_synth_thread(
                             synth.note_off(instrument, event.pitch, pulse);
                             held_from_schedule.retain(|&pitch| pitch != event.pitch);
                         }
-                        active.next_index += 1;
                     }
-                    if active.next_index >= active.events.len() {
+                    if finished {
                         schedule = None;
                     }
                 }
@@ -451,4 +519,86 @@ fn spawn_synth_thread(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(at_pulse: u64, pitch: u8, is_on: bool) -> ScheduledEvent {
+        ScheduledEvent {
+            at_pulse,
+            pitch,
+            velocity: 100,
+            is_on,
+        }
+    }
+
+    fn schedule(loopable: bool) -> ActiveSchedule {
+        ActiveSchedule {
+            events: vec![event(0, 60, true), event(4, 60, false)],
+            started_at_frame: 0,
+            next_index: 0,
+            loopable,
+        }
+    }
+
+    #[test]
+    fn a_loopable_schedule_restarts_from_the_beginning_without_dropping_or_duplicating_events() {
+        let mut active = schedule(true);
+
+        let (fired, finished) = advance_schedule(&mut active, 0, 0, true);
+        assert_eq!(fired, vec![event(0, 60, true)]);
+        assert!(!finished);
+
+        // Reaching the note-off at pulse 4 wraps in place (loop_enabled and
+        // loopable) instead of finishing.
+        let (fired, finished) = advance_schedule(&mut active, 4, 100, true);
+        assert_eq!(fired, vec![event(4, 60, false)]);
+        assert!(!finished);
+        assert_eq!(active.next_index, 0);
+        assert_eq!(active.started_at_frame, 100);
+
+        // The very next call, measured from the new start, immediately
+        // re-fires the note-on at pulse 0 of the new pass: no gap, no
+        // dropped or duplicated event at the loop boundary.
+        let (fired, finished) = advance_schedule(&mut active, 0, 100, true);
+        assert_eq!(fired, vec![event(0, 60, true)]);
+        assert!(!finished);
+    }
+
+    #[test]
+    fn a_schedule_finishes_instead_of_looping_when_loop_is_off() {
+        let mut active = schedule(true);
+        advance_schedule(&mut active, 0, 0, false);
+
+        let (fired, finished) = advance_schedule(&mut active, 4, 100, false);
+
+        assert_eq!(fired, vec![event(4, 60, false)]);
+        assert!(finished);
+    }
+
+    #[test]
+    fn a_non_loopable_schedule_never_wraps_even_when_loop_is_on() {
+        let mut active = schedule(false);
+        advance_schedule(&mut active, 0, 0, true);
+
+        let (fired, finished) = advance_schedule(&mut active, 4, 100, true);
+
+        assert_eq!(fired, vec![event(4, 60, false)]);
+        assert!(finished);
+    }
+
+    #[test]
+    fn toggling_loop_off_mid_playback_lets_the_current_pass_finish_instead_of_wrapping() {
+        let mut active = schedule(true);
+        // First pass starts with loop on...
+        advance_schedule(&mut active, 0, 0, true);
+        // ...but by the time it reaches the end, loop has been switched
+        // off: the current pass finishes rather than wrapping, per the
+        // spec's "toggling loop during playback takes effect on the
+        // current pass".
+        let (_, finished) = advance_schedule(&mut active, 4, 100, false);
+        assert!(finished);
+    }
 }

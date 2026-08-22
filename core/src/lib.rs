@@ -75,6 +75,12 @@ pub struct ProjectState {
     /// Blocks placed on the timeline (issue #17).
     pub placements: Vec<Placement>,
     pub next_placement_id: u64,
+    /// Whether timeline playback (issue #18) restarts from the beginning
+    /// when it reaches the end (issue #19), off by default. A performance
+    /// preference like `metronome_enabled`, not a musical edit — it lives
+    /// in project state (and is saved with it) but never enters undo
+    /// history.
+    pub loop_enabled: bool,
     /// Whether the shell is currently capturing live MIDI into a take.
     /// A performance/session flag, not a musical edit — see
     /// [`Command::StartRecording`].
@@ -305,6 +311,7 @@ impl Default for ProjectState {
             next_block_id: 1,
             placements: Vec::new(),
             next_placement_id: 1,
+            loop_enabled: false,
             is_recording: false,
             is_playing: false,
         }
@@ -373,6 +380,11 @@ pub enum Command {
     /// Switches the one-bar count-in on or off. This is intentionally excluded
     /// from undo/redo history, like [`Command::SetReverb`].
     SetCountInEnabled(bool),
+    /// Switches timeline looping (issue #19) on or off. Takes effect on the
+    /// current playback pass, if any — the shell reads this fresh each time
+    /// playback would otherwise end. This is intentionally excluded from
+    /// undo/redo history, like [`Command::SetReverb`].
+    SetLoopEnabled(bool),
     /// Arms recording. Not itself undoable — arming isn't a musical edit, the
     /// take that results from it is (see [`Command::StopRecording`]).
     ///
@@ -638,6 +650,12 @@ impl DawCore {
                 self.state.count_in_enabled = enabled;
                 // Count-in changes how a future recording starts; it does
                 // not change any recorded material or the undo history.
+                Vec::new()
+            }
+            Command::SetLoopEnabled(enabled) => {
+                self.state.loop_enabled = enabled;
+                // A performance preference, not a musical edit — leaves
+                // undo/redo aimed at music, like reverb/metronome/count-in.
                 Vec::new()
             }
             Command::StartRecording { force } => {
@@ -932,6 +950,7 @@ impl DawCore {
             Command::SetReverb(_)
             | Command::SetMetronomeEnabled(_)
             | Command::SetCountInEnabled(_)
+            | Command::SetLoopEnabled(_)
             | Command::StartRecording { .. }
             | Command::PlayTake
             | Command::PlayBlock(_)

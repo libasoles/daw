@@ -73,6 +73,7 @@ fn sync_audio_engine(app: &AppHandle, state: &ProjectState, metronome_enabled: b
             state.bpm,
             state.time_signature,
             metronome_enabled,
+            state.loop_enabled,
         );
     }
 }

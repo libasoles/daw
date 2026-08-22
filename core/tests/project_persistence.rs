@@ -11,6 +11,7 @@ fn opening_a_saved_project_restores_every_setting_and_every_block() {
     core.apply(Command::SetReverb(42));
     core.apply(Command::SetMetronomeEnabled(true));
     core.apply(Command::SetCountInEnabled(true));
+    core.apply(Command::SetLoopEnabled(true));
     core.apply(Command::StopRecording(Some(Take::from_raw_notes(vec![
         RecordedNote {
             pitch: 60,
@@ -48,6 +49,7 @@ fn opening_a_saved_project_restores_every_setting_and_every_block() {
     assert_eq!(reopened.state().reverb, 42);
     assert!(reopened.state().metronome_enabled);
     assert!(reopened.state().count_in_enabled);
+    assert!(reopened.state().loop_enabled);
     assert_eq!(reopened.state().blocks.len(), 1);
     assert_eq!(reopened.state().blocks[0].name, "Verse");
     assert_eq!(reopened.state().blocks[0].color, "#60a5fa");

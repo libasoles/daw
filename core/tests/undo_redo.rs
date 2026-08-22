@@ -56,6 +56,7 @@ fn pulse_control_changes_are_not_logged_or_undone() {
     let mut core = DawCore::new();
     core.apply(Command::SetMetronomeEnabled(true));
     core.apply(Command::SetCountInEnabled(false));
+    core.apply(Command::SetLoopEnabled(true));
     core.apply(Command::SetBpm(140));
 
     let applied = core.apply(Command::Undo);
@@ -63,6 +64,7 @@ fn pulse_control_changes_are_not_logged_or_undone() {
     assert_eq!(applied.state.bpm, 120);
     assert!(applied.state.metronome_enabled);
     assert!(!applied.state.count_in_enabled);
+    assert!(applied.state.loop_enabled);
     assert_eq!(
         core.apply(Command::Undo).effects,
         vec![Effect::NothingToUndo]

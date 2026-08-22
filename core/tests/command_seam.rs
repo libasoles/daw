@@ -53,10 +53,12 @@ fn applying_pulse_controls_changes_the_project_state() {
     let mut core = DawCore::new();
 
     core.apply(Command::SetMetronomeEnabled(true));
-    let applied = core.apply(Command::SetCountInEnabled(false));
+    core.apply(Command::SetCountInEnabled(false));
+    let applied = core.apply(Command::SetLoopEnabled(true));
 
     assert!(applied.state.metronome_enabled);
     assert!(!applied.state.count_in_enabled);
+    assert!(applied.state.loop_enabled);
 }
 
 #[test]

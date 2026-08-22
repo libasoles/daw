@@ -93,6 +93,9 @@ fn apply_command(app: AppHandle, command: Command) -> Applied {
 fn dispatch(app: &AppHandle, command: Command) -> Applied {
     let starting_recording = matches!(command, Command::StartRecording { .. });
     let opening_new_project = matches!(command, Command::NewProject { .. });
+    // Only timeline playback (issue #19) may loop; an isolated take or
+    // block never does, whatever the project's loop setting is.
+    let is_timeline_playback = matches!(command, Command::PlayTimeline);
 
     let applied = {
         let core = app.state::<Mutex<DawCore>>();
@@ -123,7 +126,7 @@ fn dispatch(app: &AppHandle, command: Command) -> Applied {
 
     for effect in &applied.effects {
         if let Effect::PlaySchedule(take) = effect {
-            play_take_schedule(app, take, applied.state.bpm);
+            play_take_schedule(app, take, applied.state.bpm, is_timeline_playback);
         }
     }
 
@@ -140,6 +143,7 @@ fn sync_audio_engine(app: &AppHandle, state: &ProjectState, metronome_enabled: b
             state.bpm,
             state.time_signature,
             metronome_enabled,
+            state.loop_enabled,
         ) {
             eprintln!("could not update audio controls: {err}");
         }
@@ -152,7 +156,16 @@ fn sync_audio_engine(app: &AppHandle, state: &ProjectState, metronome_enabled: b
 /// the take's own length rather than any signal back from the audio thread,
 /// the same way `play_test_note` already turns a fixed hold into a timed
 /// note-off on a plain thread.
-fn play_take_schedule(app: &AppHandle, take: &Take, bpm: u16) {
+///
+/// `loopable` marks whether this schedule may be a looping one (issue #19)
+/// — only ever `true` for timeline playback, never an isolated take or
+/// block. When it is, and the project's loop setting is on, the completion
+/// timer re-arms itself for another pass instead of finishing — read fresh
+/// each time it would otherwise fire, so toggling loop mid-playback takes
+/// effect on the current pass. The audio itself loops seamlessly inside the
+/// synth thread regardless of this timer; this only decides when the shell
+/// should stop pretending playback is still running.
+fn play_take_schedule(app: &AppHandle, take: &Take, bpm: u16, loopable: bool) {
     let notes = take.notes();
     let events: Vec<ScheduledEvent> = notes
         .iter()
@@ -180,7 +193,7 @@ fn play_take_schedule(app: &AppHandle, take: &Take, bpm: u16) {
         let engine = app.state::<AudioEngineHandle>();
         let mut engine = engine.0.lock().expect("audio engine mutex poisoned");
         match engine.as_mut() {
-            Some(engine) => engine.play_schedule(events).is_ok(),
+            Some(engine) => engine.play_schedule(events, loopable).is_ok(),
             None => false,
         }
     };
@@ -195,15 +208,31 @@ fn play_take_schedule(app: &AppHandle, take: &Take, bpm: u16) {
         + 1;
 
     // Always resolves eventually — immediately if there was nothing to play,
-    // otherwise after the schedule's own length — so `is_playing` can never
-    // get stuck true with no audio actually sounding.
+    // otherwise after the schedule's own length (repeatedly, while looping)
+    // — so `is_playing` can never get stuck true with no audio actually
+    // sounding.
     let app = app.clone();
     thread::spawn(move || {
-        if started {
-            thread::sleep(total_duration);
-        }
-        if app.state::<PlaybackGeneration>().0.load(Ordering::SeqCst) == generation {
+        if !started {
             dispatch(&app, Command::PlaybackFinished);
+            return;
+        }
+        loop {
+            thread::sleep(total_duration);
+            if app.state::<PlaybackGeneration>().0.load(Ordering::SeqCst) != generation {
+                // Superseded by an explicit stop or a fresh playback — not
+                // this timer's schedule to finish.
+                return;
+            }
+            let loop_enabled = {
+                let core = app.state::<Mutex<DawCore>>();
+                let core = core.lock().expect("DawCore mutex poisoned");
+                core.state().loop_enabled
+            };
+            if !(loopable && loop_enabled) {
+                dispatch(&app, Command::PlaybackFinished);
+                return;
+            }
         }
     });
 }
@@ -542,6 +571,7 @@ pub fn run() {
                         state.bpm,
                         state.time_signature,
                         state.metronome_enabled,
+                        state.loop_enabled,
                     ) {
                         eprintln!("could not initialise audio controls: {err}");
                     }
