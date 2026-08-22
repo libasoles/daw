@@ -298,6 +298,16 @@ pub enum Command {
         document: ProjectState,
         force: bool,
     },
+    /// Restores a session from a crash-recovery snapshot (issue #15).
+    /// Unlike [`Command::OpenProject`], this never establishes a new saved
+    /// baseline: the snapshot was written while there were unsaved changes
+    /// and was never itself a manual save, so the restored session must
+    /// still report `is_dirty`, exactly as it was when the snapshot was
+    /// taken, prompting the user to save for real. Not undoable, and — like
+    /// `OpenProject` — clears undo/redo history. Never gated: recovery only
+    /// ever happens once, immediately at launch, before there is any current
+    /// project whose unsaved changes could be at risk.
+    RecoverProject(ProjectState),
     /// Records that the shell successfully wrote the current document. This
     /// is not undoable: it changes the save baseline, not musical content.
     ProjectSaved,
@@ -499,6 +509,17 @@ impl DawCore {
                     self.clear_history();
                     Vec::new()
                 }
+            }
+            Command::RecoverProject(mut state) => {
+                state.is_recording = false;
+                state.is_playing = false;
+                // Deliberately leave `saved_state` untouched (always `None`
+                // here, since recovery only ever runs once, right at
+                // launch) so `sync_dirty_state` reports the restored
+                // session as still unsaved.
+                self.state = state;
+                self.clear_history();
+                Vec::new()
             }
             Command::ProjectSaved => {
                 self.saved_state = Some(Self::document_state(&self.state));
@@ -785,6 +806,7 @@ impl DawCore {
             | Command::PlaybackFinished
             | Command::NewProject { .. }
             | Command::OpenProject { .. }
+            | Command::RecoverProject(_)
             | Command::ProjectSaved
             | Command::Undo
             | Command::Redo => {}

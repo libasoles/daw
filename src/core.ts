@@ -107,6 +107,27 @@ export function openProject(name: string, force = false): Promise<Applied> {
   return invoke<Applied>("open_project", { name, force });
 }
 
+/** A crash-recovery snapshot (issue #15): the project as it stood when it
+ * was last written, roughly every ten seconds while unsaved changes
+ * existed, plus the name it was saved under, if any. */
+export interface RecoverySnapshot {
+  project_name: string | null;
+  document: ProjectState;
+}
+
+/** The recovery snapshot found at launch, if any. Reading it doesn't consume
+ * it — only `resolveRecovery` does that, once the user has decided. */
+export function fetchRecoverySnapshot(): Promise<RecoverySnapshot | null> {
+  return invoke<RecoverySnapshot | null>("recovery_snapshot");
+}
+
+/** Accepts or declines the found recovery snapshot. Accepting restores the
+ * session (still reporting unsaved changes, since a snapshot was never a
+ * manual save); either way the snapshot itself is deleted. */
+export function resolveRecovery(accept: boolean): Promise<Applied> {
+  return invoke<Applied>("resolve_recovery", { accept });
+}
+
 /**
  * Finishes recording: the shell turns the raw MIDI it captured natively into
  * a `Take` and applies it as `Command::StopRecording`. This can't be a

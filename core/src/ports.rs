@@ -22,16 +22,31 @@ pub type InstrumentId = u32;
 
 /// Project-document storage, kept behind a port so the musical core never
 /// knows filesystem paths or native dialogs (issue #13).
+///
+/// The crash-recovery snapshot (issue #15) is addressed by its own
+/// `*_snapshot` methods, entirely separate from `save`/`load`/`list`'s named
+/// project documents — the spec requires the snapshot to be "a separate
+/// document" that "never touches a saved project file", so an implementation
+/// must back it with distinct storage, never a name a real project could
+/// collide with.
 pub trait Storage: Send {
     fn save(&mut self, name: &str, document: String) -> Result<(), String>;
     fn load(&self, name: &str) -> Result<Option<String>, String>;
     fn list(&self) -> Result<Vec<String>, String>;
+
+    fn save_snapshot(&mut self, document: String) -> Result<(), String>;
+    fn load_snapshot(&self) -> Result<Option<String>, String>;
+    fn delete_snapshot(&mut self) -> Result<(), String>;
 }
 
 /// In-memory storage adapter for deterministic project round-trip tests.
+/// The snapshot lives in its own field, never in `documents`, so a test
+/// mistake that tried to reach it by project name would fail loudly rather
+/// than silently reading the wrong thing.
 #[derive(Default)]
 pub struct MemoryStorage {
     documents: BTreeMap<String, String>,
+    snapshot: Option<String>,
 }
 
 impl Storage for MemoryStorage {
@@ -46,6 +61,20 @@ impl Storage for MemoryStorage {
 
     fn list(&self) -> Result<Vec<String>, String> {
         Ok(self.documents.keys().cloned().collect())
+    }
+
+    fn save_snapshot(&mut self, document: String) -> Result<(), String> {
+        self.snapshot = Some(document);
+        Ok(())
+    }
+
+    fn load_snapshot(&self) -> Result<Option<String>, String> {
+        Ok(self.snapshot.clone())
+    }
+
+    fn delete_snapshot(&mut self) -> Result<(), String> {
+        self.snapshot = None;
+        Ok(())
     }
 }
 

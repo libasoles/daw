@@ -231,11 +231,12 @@ fn save_project(app: AppHandle, requested_name: Option<String>) -> Result<Projec
 
     {
         let storage = app.state::<ProjectStorage>();
-        storage
-            .0
-            .lock()
-            .expect("project storage mutex poisoned")
-            .save(&name, document)?;
+        let mut storage = storage.0.lock().expect("project storage mutex poisoned");
+        storage.save(&name, document)?;
+        // A manual save is now the newest record of this work, so the
+        // crash-recovery snapshot (issue #15) — meant only to cover the gap
+        // between saves — no longer has anything to add.
+        storage.delete_snapshot()?;
     }
 
     let state = {
@@ -293,6 +294,135 @@ fn open_project(app: AppHandle, name: String, force: bool) -> Result<Applied, St
             .expect("project name mutex poisoned") = Some(name);
     }
     Ok(applied)
+}
+
+/// A crash-recovery snapshot (issue #15) as read from or written to storage:
+/// the durable project document plus whatever name it was saved under, if
+/// any — `ProjectState` itself carries no name, that lives only in the
+/// shell's `CurrentProjectName`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RecoverySnapshot {
+    project_name: Option<String>,
+    document: ProjectState,
+}
+
+/// Reports the crash-recovery snapshot found at launch, if any, so the
+/// webview can ask the user whether to recover it. Reading never consumes
+/// the snapshot — only `resolve_recovery` does that, once the user has
+/// actually decided.
+#[tauri::command]
+fn recovery_snapshot(app: AppHandle) -> Result<Option<RecoverySnapshot>, String> {
+    let raw = app
+        .state::<ProjectStorage>()
+        .0
+        .lock()
+        .expect("project storage mutex poisoned")
+        .load_snapshot()?;
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|error| format!("could not read recovery snapshot: {error}"))
+}
+
+/// Acts on the user's recovery decision. Accepting restores the snapshot's
+/// session — including its project name, and, per the spec, still reporting
+/// unsaved changes since a snapshot was never a manual save — via
+/// `Command::RecoverProject`. Either way the snapshot is deleted: declining
+/// discards it outright, and accepting has now folded it into the running
+/// session, so leaving the file behind would only offer to "recover" the
+/// same interruption again next launch.
+#[tauri::command]
+fn resolve_recovery(app: AppHandle, accept: bool) -> Result<Applied, String> {
+    let raw = app
+        .state::<ProjectStorage>()
+        .0
+        .lock()
+        .expect("project storage mutex poisoned")
+        .load_snapshot()?;
+
+    let applied = if accept {
+        if let Some(raw) = raw {
+            let snapshot: RecoverySnapshot = serde_json::from_str(&raw)
+                .map_err(|error| format!("could not read recovery snapshot: {error}"))?;
+            let applied = dispatch(&app, Command::RecoverProject(snapshot.document));
+            *app.state::<CurrentProjectName>()
+                .0
+                .lock()
+                .expect("project name mutex poisoned") = snapshot.project_name;
+            applied
+        } else {
+            project_state_applied(&app)
+        }
+    } else {
+        project_state_applied(&app)
+    };
+
+    app.state::<ProjectStorage>()
+        .0
+        .lock()
+        .expect("project storage mutex poisoned")
+        .delete_snapshot()?;
+
+    Ok(applied)
+}
+
+fn project_state_applied(app: &AppHandle) -> Applied {
+    let core = app.state::<Mutex<DawCore>>();
+    let core = core.lock().expect("DawCore mutex poisoned");
+    Applied {
+        state: core.state().clone(),
+        effects: Vec::new(),
+    }
+}
+
+/// How often a crash-recovery snapshot is written while there are unsaved
+/// changes. "Roughly every ten seconds", per the spec — this is a recovery
+/// aid, not a save, so it doesn't need to be exact.
+const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Runs for the life of the app, writing a recovery snapshot on every tick
+/// while the project is dirty. Never runs while the project is clean: a
+/// snapshot only exists to cover the gap since the last manual save, and
+/// `save_project` deletes it the moment that gap closes.
+fn spawn_snapshot_writer(app: AppHandle) {
+    thread::spawn(move || loop {
+        thread::sleep(SNAPSHOT_INTERVAL);
+
+        let document = {
+            let core = app.state::<Mutex<DawCore>>();
+            let core = core.lock().expect("DawCore mutex poisoned");
+            if !core.state().is_dirty {
+                continue;
+            }
+            core.project_document()
+        };
+        let project_name = app
+            .state::<CurrentProjectName>()
+            .0
+            .lock()
+            .expect("project name mutex poisoned")
+            .clone();
+
+        let snapshot = RecoverySnapshot {
+            project_name,
+            document,
+        };
+        let serialized = match serde_json::to_string(&snapshot) {
+            Ok(serialized) => serialized,
+            Err(error) => {
+                eprintln!("could not encode recovery snapshot: {error}");
+                continue;
+            }
+        };
+
+        let storage = app.state::<ProjectStorage>();
+        let mut storage = storage.0.lock().expect("project storage mutex poisoned");
+        if let Err(error) = storage.save_snapshot(serialized) {
+            eprintln!("could not write recovery snapshot: {error}");
+        }
+    });
 }
 
 /// Sounds a single fixed note for manual/test verification, since neither
@@ -378,8 +508,24 @@ pub fn run() {
                 selected_device,
             ))));
             spawn_reconnector(app.handle().clone());
+            spawn_snapshot_writer(app.handle().clone());
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // A clean quit — including a close the user confirmed past the
+            // unsaved-changes warning (#14) — deletes the crash-recovery
+            // snapshot (#15): there is nothing left to recover from once the
+            // app has shut down in an orderly way. A crash never reaches
+            // this handler at all, which is exactly what leaves the
+            // snapshot behind for the next launch to offer.
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                let storage = window.app_handle().state::<ProjectStorage>();
+                let mut storage = storage.0.lock().expect("project storage mutex poisoned");
+                if let Err(error) = storage.delete_snapshot() {
+                    eprintln!("could not delete recovery snapshot: {error}");
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             apply_command,
@@ -387,6 +533,8 @@ pub fn run() {
             save_project,
             list_projects,
             open_project,
+            recovery_snapshot,
+            resolve_recovery,
             play_test_note,
             stop_recording,
             list_midi_devices,

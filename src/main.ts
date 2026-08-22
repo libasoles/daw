@@ -18,16 +18,19 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   applyCommand,
   fetchProjectState,
+  fetchRecoverySnapshot,
   listProjects,
   listMidiDevices,
   openProject,
   playTestNote,
+  resolveRecovery,
   saveProject,
   selectMidiDevice,
   stopRecording,
   type MidiStatus,
   type ProjectState,
   type Quantisation,
+  type RecoverySnapshot,
 } from "./core";
 
 /** Three stacked blocks on a timeline — the shape the whole app is about. */
@@ -65,6 +68,9 @@ let pendingProjectAction: PendingProjectAction | null = null;
  * unsaved-changes prompt's "Save" choice on a never-saved project, so the
  * pending action can resume once the name is submitted. */
 let pendingActionAfterNaming: PendingProjectAction | null = null;
+/** A crash-recovery snapshot (issue #15) found at launch, shown once as its
+ * own modal asking whether to recover; `null` once resolved. */
+let pendingRecovery: RecoverySnapshot | null = null;
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>'"]/g, (character) => `&#${character.charCodeAt(0)};`);
@@ -242,6 +248,21 @@ function render(root: HTMLElement, state: ProjectState): void {
             <button type="button" data-unsaved-save>Save</button>
             <button type="button" data-unsaved-discard>Discard</button>
             <button type="button" data-unsaved-cancel>Cancel</button>
+          </div>
+        </div>
+      </div>
+    ` : ""}
+    ${pendingRecovery ? /* html */ `
+      <div class="modal-overlay" data-recovery-overlay>
+        <div class="modal" role="alertdialog" aria-modal="true" aria-label="Recover interrupted session">
+          <p>${
+            pendingRecovery.project_name
+              ? `An interrupted session of "${escapeHtml(pendingRecovery.project_name)}" was found. Recover it?`
+              : "An interrupted session was found. Recover it?"
+          }</p>
+          <div class="modal__actions">
+            <button type="button" data-recovery-accept>Recover</button>
+            <button type="button" data-recovery-decline>Discard</button>
           </div>
         </div>
       </div>
@@ -454,6 +475,32 @@ async function saveThenProceedWithProjectAction(
   await proceedWithProjectAction(root, action);
 }
 
+/**
+ * Checked once at startup: if a crash-recovery snapshot (issue #15) is
+ * present, holds it in `pendingRecovery` so `render` shows the "recover?"
+ * modal over the otherwise-normal (fresh, empty) initial state, rather than
+ * silently applying it — recovery is always the user's decision.
+ */
+async function checkForRecoverySnapshot(root: HTMLElement): Promise<void> {
+  const snapshot = await fetchRecoverySnapshot();
+  if (!snapshot) return;
+  pendingRecovery = snapshot;
+  render(root, currentState!);
+}
+
+/** The recovery modal's choice: accept restores the interrupted session
+ * (still reporting unsaved changes) under whatever name it had, if any;
+ * decline discards the snapshot and leaves the fresh project the app
+ * already opened on. Either way the snapshot itself is gone once this
+ * returns. */
+async function settleRecovery(root: HTMLElement, accept: boolean): Promise<void> {
+  const projectName = pendingRecovery?.project_name ?? null;
+  pendingRecovery = null;
+  const applied = await resolveRecovery(accept);
+  activeProjectName = accept ? projectName : null;
+  render(root, applied.state);
+}
+
 function wireProjectControls(root: HTMLElement): void {
   root.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
@@ -483,6 +530,9 @@ function wireProjectControls(root: HTMLElement): void {
       pendingProjectAction = null;
       if (action) void saveThenProceedWithProjectAction(root, action);
     }
+
+    if (target.closest("[data-recovery-accept]")) void settleRecovery(root, true);
+    if (target.closest("[data-recovery-decline]")) void settleRecovery(root, false);
   });
 
   root.addEventListener("submit", (event) => {
@@ -779,6 +829,7 @@ async function main(): Promise<void> {
 
   const state = await fetchProjectState();
   render(root, state);
+  await checkForRecoverySnapshot(root);
   await refreshProjects(root);
   wireProjectControls(root);
   wireTempoControls(root);
