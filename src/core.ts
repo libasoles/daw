@@ -24,6 +24,7 @@ export interface Take {
 }
 
 export interface Block {
+  id: number;
   name: string;
   color: string;
   instrument: number;
@@ -41,6 +42,7 @@ export interface ProjectState {
   count_in_enabled: boolean;
   take: Take | null;
   blocks: Block[];
+  next_block_id: number;
   is_recording: boolean;
   is_playing: boolean;
 }
@@ -61,6 +63,9 @@ export type Command =
   | { type: "setTakeQuantisation"; payload: Quantisation }
   | { type: "addTakeToLibrary" }
   | { type: "playBlock"; payload: number }
+  | { type: "renameBlock"; payload: { id: number; name: string } }
+  | { type: "recolourBlock"; payload: { id: number; color: string } }
+  | { type: "deleteBlock"; payload: number }
   | { type: "playTake" }
   | { type: "undo" }
   | { type: "redo" };

@@ -35,3 +35,32 @@ fn adding_a_take_to_the_library_freezes_its_current_view_and_is_undoable() {
     assert!(core.apply(Command::Undo).state.blocks.is_empty());
     assert_eq!(core.apply(Command::Redo).state.blocks[0].name, "Take 1");
 }
+
+#[test]
+fn renaming_recolouring_and_deleting_a_block_are_undoable() {
+    let mut core = DawCore::new();
+    core.apply(Command::StopRecording(Some(Take::from_raw_notes(vec![
+        RecordedNote {
+            pitch: 64,
+            velocity: 90,
+            start_pulse: 0,
+            end_pulse: 4,
+        },
+    ]))));
+    let block = core.apply(Command::AddTakeToLibrary).state.blocks[0].clone();
+    core.apply(Command::RenameBlock {
+        id: block.id,
+        name: "Verse".into(),
+    });
+    core.apply(Command::RecolourBlock {
+        id: block.id,
+        color: "#60a5fa".into(),
+    });
+    let deleted = core.apply(Command::DeleteBlock(block.id));
+    assert!(deleted.state.blocks.is_empty());
+
+    let restored = core.apply(Command::Undo);
+    assert_eq!(restored.state.blocks[0].name, "Verse");
+    assert_eq!(restored.state.blocks[0].color, "#60a5fa");
+    assert_eq!(restored.state.blocks[0].notes, block.notes);
+}

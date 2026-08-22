@@ -67,6 +67,7 @@ pub struct ProjectState {
     pub take: Option<Take>,
     /// Frozen blocks held by the library.
     pub blocks: Vec<Block>,
+    pub next_block_id: u64,
     /// Whether the shell is currently capturing live MIDI into a take.
     /// A performance/session flag, not a musical edit — see
     /// [`Command::StartRecording`].
@@ -89,6 +90,7 @@ pub struct RecordedNote {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Block {
+    pub id: u64,
     pub name: String,
     pub color: String,
     pub instrument: InstrumentId,
@@ -254,6 +256,7 @@ impl Default for ProjectState {
             count_in_enabled: true,
             take: None,
             blocks: Vec::new(),
+            next_block_id: 1,
             is_recording: false,
             is_playing: false,
         }
@@ -315,6 +318,15 @@ pub enum Command {
     InsertBlock(Block),
     RemoveBlock(Block),
     PlayBlock(usize),
+    RenameBlock {
+        id: u64,
+        name: String,
+    },
+    RecolourBlock {
+        id: u64,
+        color: String,
+    },
+    DeleteBlock(u64),
     SetTakeTrim(Trim),
     SetTakeQuantisation(Quantisation),
     /// Starts isolated playback of the current take, if there is one. Not
@@ -485,12 +497,14 @@ impl DawCore {
             Command::AddTakeToLibrary => {
                 if let Some(take) = self.state.take.as_ref() {
                     let block = Block {
+                        id: self.state.next_block_id,
                         name: format!("Take {}", self.state.blocks.len() + 1),
                         color: BLOCK_COLORS[self.state.blocks.len() % BLOCK_COLORS.len()].into(),
                         instrument: self.state.instrument,
                         notes: take.notes(),
                     };
                     self.state.blocks.push(block.clone());
+                    self.state.next_block_id += 1;
                     self.log(
                         Command::InsertBlock(block.clone()),
                         Command::RemoveBlock(block),
@@ -504,6 +518,38 @@ impl DawCore {
             }
             Command::RemoveBlock(block) => {
                 self.state.blocks.retain(|candidate| candidate != &block);
+                Vec::new()
+            }
+            Command::RenameBlock { id, name } => {
+                if let Some(block) = self.state.blocks.iter_mut().find(|block| block.id == id) {
+                    let inverse = Command::RenameBlock {
+                        id,
+                        name: block.name.clone(),
+                    };
+                    block.name = name.clone();
+                    self.log(Command::RenameBlock { id, name }, inverse);
+                }
+                Vec::new()
+            }
+            Command::RecolourBlock { id, color } => {
+                if let Some(block) = self.state.blocks.iter_mut().find(|block| block.id == id) {
+                    let inverse = Command::RecolourBlock {
+                        id,
+                        color: block.color.clone(),
+                    };
+                    block.color = color.clone();
+                    self.log(Command::RecolourBlock { id, color }, inverse);
+                }
+                Vec::new()
+            }
+            Command::DeleteBlock(id) => {
+                if let Some(index) = self.state.blocks.iter().position(|block| block.id == id) {
+                    let block = self.state.blocks.remove(index);
+                    self.log(
+                        Command::RemoveBlock(block.clone()),
+                        Command::InsertBlock(block),
+                    );
+                }
                 Vec::new()
             }
             Command::SetTakeTrim(trim) => {
@@ -627,6 +673,17 @@ impl DawCore {
             Command::RemoveBlock(block) => {
                 state.blocks.retain(|candidate| candidate != block);
             }
+            Command::RenameBlock { id, name } => {
+                if let Some(block) = state.blocks.iter_mut().find(|block| block.id == *id) {
+                    block.name = name.clone();
+                }
+            }
+            Command::RecolourBlock { id, color } => {
+                if let Some(block) = state.blocks.iter_mut().find(|block| block.id == *id) {
+                    block.color = color.clone();
+                }
+            }
+            Command::DeleteBlock(_) => {}
             Command::SetTakeTrim(trim) => {
                 if let Some(take) = state.take.as_mut() {
                     take.set_trim(*trim);

@@ -168,7 +168,7 @@ function render(root: HTMLElement, state: ProjectState): void {
       </div>
       <aside class="library" aria-label="Library">
         <h2>Library</h2>
-        ${state.blocks.map((block, index) => `<div class="library-block" style="--block-color: ${block.color}">${block.name}<button type="button" data-play-block="${index}"${state.is_playing ? " disabled" : ""}>Play</button></div>`).join("") || "<span class=\"take-summary take-summary--empty\">no blocks yet</span>"}
+        ${state.blocks.map((block, index) => `<div class="library-block" style="--block-color: ${block.color}"><span data-block-name="${block.id}">${block.name}</span><input data-block-color="${block.id}" type="color" value="${block.color}" /><button type="button" data-delete-block="${block.id}">Delete</button><button type="button" data-play-block="${index}"${state.is_playing ? " disabled" : ""}>Play</button></div>`).join("") || "<span class=\"take-summary take-summary--empty\">no blocks yet</span>"}
       </aside>
       <div class="midi-control" aria-label="MIDI input">
         <label class="sound-control">
@@ -469,6 +469,21 @@ function wireRecordingControls(root: HTMLElement): void {
     }
     const blockButton = target.closest<HTMLButtonElement>("[data-play-block]");
     if (blockButton) void playBlock(root, Number(blockButton.dataset.playBlock));
+    const deleteButton = target.closest<HTMLButtonElement>("[data-delete-block]");
+    if (deleteButton) void applyCommand({ type: "deleteBlock", payload: Number(deleteButton.dataset.deleteBlock) }).then((applied) => render(root, applied.state));
+  });
+
+  root.addEventListener("dblclick", (event) => {
+    const name = (event.target as HTMLElement).closest<HTMLElement>("[data-block-name]");
+    if (!name) return;
+    const value = window.prompt("Block name", name.textContent ?? "");
+    if (value !== null) void applyCommand({ type: "renameBlock", payload: { id: Number(name.dataset.blockName), name: value } }).then((applied) => render(root, applied.state));
+  });
+
+  root.addEventListener("change", (event) => {
+    const color = event.target as HTMLInputElement;
+    if (!color.matches("[data-block-color]")) return;
+    void applyCommand({ type: "recolourBlock", payload: { id: Number(color.dataset.blockColor), color: color.value } }).then((applied) => render(root, applied.state));
   });
 
   root.addEventListener("change", (event) => {

@@ -119,6 +119,7 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
             count_in_enabled: false,
             take: None,
             blocks: Vec::new(),
+            next_block_id: 1,
             is_recording: false,
             is_playing: false,
         },
@@ -137,6 +138,7 @@ fn applied_serialises_state_and_effects_for_the_frontend_to_render() {
                 "count_in_enabled": false,
                 "take": null,
                 "blocks": [],
+                "next_block_id": 1,
                 "is_recording": false,
                 "is_playing": false
             },
