@@ -1,0 +1,128 @@
+/*
+ * The daw's visual foundation: dark, low density, large type.
+ *
+ * This app is used at arm's length while holding an instrument, so nothing is
+ * allowed to be small. `--text-xs` (16px) is the floor for any text that a
+ * musician has to read while playing; the body default is 18px.
+ *
+ * Typeface: the macOS system stack — SF Pro Text / SF Pro Display, reached via
+ * `-apple-system` and `ui-sans-serif`. It is chosen deliberately, not by
+ * default: it is optically sized (Text below 20px, Display above, switched by
+ * the OS), it ships with every macOS install so it costs the bundle nothing,
+ * and it has genuine tabular figures — which matters once bar numbers and BPM
+ * readouts arrive. Numeric readouts use `ui-monospace` (SF Mono) so digits
+ * don't shuffle as they change.
+ */
+
+:root {
+  /* Type scale. Steps are large and few on purpose — low density. */
+  --text-xs: 1rem; /* 16px — the floor, for labels only */
+  --text-sm: 1.125rem; /* 18px — body and controls */
+  --text-md: 1.375rem; /* 22px — section headings */
+  --text-lg: 1.75rem; /* 28px — primary readouts */
+  --text-xl: 2.5rem; /* 40px — the one thing on screen that matters */
+  --text-display: 4rem; /* 64px — the app mark */
+
+  --font-ui: ui-sans-serif, -apple-system, "SF Pro Text", "Helvetica Neue",
+    system-ui, sans-serif;
+  --font-numeric: ui-monospace, "SF Mono", "JetBrains Mono", monospace;
+
+  /* Spacing. Generous: room is the point. */
+  --space-1: 0.5rem;
+  --space-2: 1rem;
+  --space-3: 1.5rem;
+  --space-4: 2.5rem;
+  --space-5: 4rem;
+
+  /* Dark surfaces, near-black rather than grey so coloured blocks carry. */
+  --surface-base: #0d0f12;
+  --surface-raised: #16191e;
+  --line: #262b33;
+
+  --ink: #e8eaed;
+  --ink-dim: #9aa3ae;
+  --ink-faint: #5c6570;
+
+  --accent: #6ee7b7;
+
+  --radius: 6px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-base);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  /* The window chrome is the only thing a musician should be able to drag. */
+  user-select: none;
+  cursor: default;
+  overflow: hidden;
+}
+
+#app {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  padding: var(--space-5);
+}
+
+/* --- Placeholder shell (issue #2). Replaced by the three real regions:
+       recording area, library sidebar, timeline. ------------------------- */
+
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: center;
+}
+
+.placeholder__mark {
+  width: 112px;
+  height: 112px;
+  color: var(--accent);
+}
+
+.placeholder__name {
+  margin: 0;
+  font-size: var(--text-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.placeholder__tagline {
+  margin: 0;
+  max-width: 42ch;
+  font-size: var(--text-md);
+  font-weight: 400;
+  color: var(--ink-dim);
+  text-wrap: balance;
+}
+
+.placeholder__status {
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  font-family: var(--font-numeric);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+  text-transform: lowercase;
+}

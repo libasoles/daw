@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core:
+    name: Rust core
+    # The core is platform-independent by design, so it is tested on the cheap
+    # runner. The shell is macOS-only and is built in the `shell` job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: The core must not depend on Tauri
+        # The architectural rule from ADR-0001, enforced rather than trusted.
+        run: |
+          if cargo tree -p daw-core --prefix none | grep -qi tauri; then
+            echo "::error::daw-core has acquired a Tauri dependency; musical logic must stay shell-free."
+            exit 1
+          fi
+
+      - name: Clippy
+        run: cargo clippy -p daw-core --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test -p daw-core
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck and build
+        run: npm run frontend:build
+
+  shell:
+    name: macOS shell
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build the desktop shell
+        # The release path end to end: this runs the frontend build too, since
+        # `tauri::generate_context!` embeds `dist/` at compile time.
+        # `--no-bundle` skips .dmg packaging, which needs signing to be useful.
+        run: npm run build -- --no-bundle
+
+      - name: Clippy
+        # After the build, so `dist/` exists for `generate_context!`.
+        run: cargo clippy --workspace --all-targets -- -D warnings

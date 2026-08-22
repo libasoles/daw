@@ -9,6 +9,9 @@ skills-lock.json
 /target
 **/*.rs.bk
 
+# Tauri (generated mobile/desktop scaffolding, and build artefacts)
+/src-tauri/gen/
+
 # Node
 node_modules/
 dist/

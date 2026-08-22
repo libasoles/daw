@@ -1,0 +1,12 @@
+# The core crate holds all musical logic and MUST NOT depend on Tauri, on a
+# webview, or on anything else that only exists inside the desktop shell.
+# See ADR-0001. CI enforces the rule with `cargo tree`.
+[package]
+name = "daw-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure musical core for the daw: commands in, project state and effects out."
+
+[dependencies]

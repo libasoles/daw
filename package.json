@@ -1,0 +1,19 @@
+{
+  "name": "daw",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "typecheck": "tsc --noEmit",
+    "frontend:dev": "vite",
+    "frontend:build": "tsc --noEmit && vite build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
+  }
+}

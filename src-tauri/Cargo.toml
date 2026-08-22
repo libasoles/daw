@@ -1,0 +1,21 @@
+# The desktop shell. This is the ONLY crate allowed to depend on Tauri.
+# It hosts the webview and, from issue #4 onwards, the MIDI/audio ports.
+[package]
+name = "daw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A minimal MIDI DAW: record takes, keep blocks, arrange a timeline."
+
+[lib]
+# Named distinctly from the binary so `cargo` doesn't warn about the ambiguity.
+# `main.rs` is a two-line entry point; the shell itself lives in `lib.rs`.
+name = "daw_lib"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+daw-core = { path = "../core" }
+tauri = { version = "2", features = [] }
