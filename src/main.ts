@@ -47,6 +47,11 @@ const mark = /* html */ `
 const BPM_MIN = 20;
 const BPM_MAX = 300;
 const BPM_STEP = 1;
+/** Mirrors `daw-core`'s BLOCK_COLORS (core/src/lib.rs) so manually recoloured
+ * blocks stay in the same harmonic set the core auto-assigns from — a fixed
+ * swatch picker instead of the OS-native colour panel, which mixes wildly
+ * different saturations and reads as noise rather than a palette. */
+const BLOCK_COLORS = ["#f87171", "#fbbf24", "#34d399", "#60a5fa", "#a78bfa", "#f472b6"];
 const REVERB_MIN = 0;
 const REVERB_MAX = 100;
 let projects: string[] = [];
@@ -55,6 +60,7 @@ let isNamingProject = false;
 let renderedProjectState: ProjectState | null = null;
 let confirmRecordingOverwrite = false;
 let editingBlockId: number | null = null;
+let colorPickerBlockId: number | null = null;
 let libraryCollapsed = false;
 let inspectorCollapsed = false;
 let projectMenuOpen = false;
@@ -178,7 +184,31 @@ function libraryBlock(state: ProjectState, block: Block, index: number): string 
       ${editingBlockId === block.id
         ? `<label>Block name <input data-edit-block-name="${block.id}" value="${escapeHtml(block.name)}" /></label><button type="button" data-save-block-name="${block.id}">Save</button><button type="button" data-cancel-block-name>Cancel</button>`
         : `<span class="library-block__name">${escapeHtml(block.name)}</span><button type="button" data-edit-block-name-button="${block.id}">Rename</button>`}
-      <input data-block-color="${block.id}" type="color" value="${block.color}" />
+      <div class="color-picker">
+        <button
+          type="button"
+          class="color-picker__trigger"
+          data-toggle-block-color="${block.id}"
+          aria-label="Change block colour"
+          aria-haspopup="true"
+          aria-expanded="${colorPickerBlockId === block.id}"
+          style="--swatch-color: ${block.color}"
+        ></button>
+        ${colorPickerBlockId === block.id
+          ? `<div class="color-picker__popover" role="menu">
+              ${BLOCK_COLORS.map(
+                (color) => `<button
+                  type="button"
+                  class="color-picker__swatch${color === block.color ? " is-selected" : ""}"
+                  data-set-block-color="${block.id}"
+                  data-color="${color}"
+                  aria-label="Set colour ${color}"
+                  style="--swatch-color: ${color}"
+                ></button>`,
+              ).join("")}
+            </div>`
+          : ""}
+      </div>
       <button type="button" data-delete-block="${block.id}">Delete</button>
       <button type="button" data-play-block="${index}"${state.is_playing ? " disabled" : ""}>Play</button>
     </div>
@@ -886,12 +916,17 @@ function wireRecordingControls(root: HTMLElement): void {
       editingBlockId = null;
       if (renderedProjectState) render(root, renderedProjectState);
     }
-  });
-
-  root.addEventListener("change", (event) => {
-    const color = event.target as HTMLInputElement;
-    if (!color.matches("[data-block-color]")) return;
-    void applyCommand({ type: "recolourBlock", payload: { id: Number(color.dataset.blockColor), color: color.value } }).then((applied) => render(root, applied.state));
+    const colorToggle = target.closest<HTMLButtonElement>("[data-toggle-block-color]");
+    if (colorToggle?.dataset.toggleBlockColor) {
+      const id = Number(colorToggle.dataset.toggleBlockColor);
+      colorPickerBlockId = colorPickerBlockId === id ? null : id;
+      if (renderedProjectState) render(root, renderedProjectState);
+    }
+    const colorSwatch = target.closest<HTMLButtonElement>("[data-set-block-color]");
+    if (colorSwatch?.dataset.setBlockColor && colorSwatch.dataset.color) {
+      colorPickerBlockId = null;
+      void applyCommand({ type: "recolourBlock", payload: { id: Number(colorSwatch.dataset.setBlockColor), color: colorSwatch.dataset.color } }).then((applied) => render(root, applied.state));
+    }
   });
 
   root.addEventListener("change", (event) => {
