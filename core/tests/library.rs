@@ -23,6 +23,7 @@ fn adding_a_take_to_the_library_freezes_its_current_view_and_is_undoable() {
 
     assert_eq!(added.state.blocks.len(), 1);
     assert_eq!(added.state.blocks[0].name, "Take 1");
+    assert_eq!(added.state.blocks[0].color, "#f6cf4a");
     assert_eq!(added.state.blocks[0].notes[0].start_pulse, 2);
     assert_eq!(added.state.blocks[0].notes[0].end_pulse, 6);
 

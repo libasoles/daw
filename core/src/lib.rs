@@ -111,8 +111,9 @@ pub struct Block {
     pub notes: Vec<RecordedNote>,
 }
 
-const BLOCK_COLORS: [&str; 6] = [
-    "#f87171", "#fbbf24", "#34d399", "#60a5fa", "#a78bfa", "#f472b6",
+const BLOCK_COLORS: [&str; 10] = [
+    "#f6cf4a", "#da4e91", "#ec756f", "#f39b4b", "#6561df", "#6c9ce8", "#4794b8",
+    "#68cdbc", "#77d987", "#bc4bd8",
 ];
 
 /// A block placed on the timeline (CONTEXT.md's "Placement"): an

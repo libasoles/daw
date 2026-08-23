@@ -9,9 +9,8 @@
  * `Cmd+Z` / `Cmd+Shift+Z` prove the same round trip is undoable. The three
  * real regions (recording area, library, timeline) follow in H1-H3.
  *
- * The debug "Play test note" button still bypasses `Command`/`DawCore`, but
- * the global instrument and reverb controls are commands, so it audibly uses
- * the same project state future live and timeline trigger paths will use.
+ * The global instrument and reverb controls are commands, so future live and
+ * timeline trigger paths will use the same project state.
  */
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -24,7 +23,6 @@ import {
   listProjects,
   listMidiDevices,
   openProject,
-  playTestNote,
   resolveRecovery,
   saveProject,
   selectMidiDevice,
@@ -92,9 +90,15 @@ let editingBlockId: number | null = null;
  * acts on whichever placement this names. */
 let selectedPlacementId: number | null = null;
 let libraryCollapsed = false;
+let colourPickerBlockId: number | null = null;
 let inspectorCollapsed = false;
 let projectMenuOpen = false;
 let midiStatus: MidiStatus | null = null;
+/** The native stop command is still producing the finished Take. The UI can
+ * accept the next Record gesture immediately, but must serialize its command
+ * behind that stop so the core sees the commands in their musical order. */
+let stoppingRecording: Promise<unknown> | null = null;
+let startingRecording = false;
 /** Notes captured so far in the take currently being recorded, updated live
  * from the backend's "live-note" event — see `wireLiveNoteFeed`. Cleared
  * whenever a recording starts or ends, since `state.take` only reflects the
@@ -237,6 +241,12 @@ function liveTakeGrid(notes: RecordedNote[]): string {
   return `<div class="take-editor take-editor--live"><svg viewBox="0 0 ${width} 88" aria-label="Notes captured so far"><g class="take-grid">${lines}</g><g class="take-notes take-notes--live">${rects}</g></svg></div>`;
 }
 
+/** Keeps the take editor's note strip in the layout before a take exists and
+ * while a recording has not received its first note. */
+function emptyTakeGrid(message: string, isRecording = false): string {
+  return `<div class="take-editor take-editor--empty${isRecording ? " take-editor--live" : ""}"><svg viewBox="0 0 32 88" aria-label="${escapeHtml(message)}"><g class="take-grid"><line x1="0" y1="0" x2="0" y2="88" /><line x1="32" y1="0" x2="32" y2="88" /></g></svg><span class="take-editor__empty-message">${escapeHtml(message)}</span></div>`;
+}
+
 /** Shown once at boot, while the first `fetchProjectState()` is in flight.
  * The mark/name/tagline never appear again once the working UI renders. */
 function renderSplash(root: HTMLElement): void {
@@ -321,14 +331,40 @@ function topbar(state: ProjectState): string {
   `;
 }
 
+const BLOCK_COLOUR_PALETTE = [
+  "#f6cf4a",
+  "#da4e91",
+  "#ec756f",
+  "#f39b4b",
+  "#6561df",
+  "#6c9ce8",
+  "#4794b8",
+  "#68cdbc",
+  "#77d987",
+  "#bc4bd8",
+];
+
 function libraryBlock(state: ProjectState, block: Block, index: number): string {
+  const isColourPickerOpen = colourPickerBlockId === block.id;
   return /* html */ `
     <div class="library-block" style="--block-color: ${block.color}" draggable="true" data-drag-block="${block.id}">
-      <span class="library-block__swatch"></span>
+      <div class="library-block__colour-picker">
+        <button
+          class="library-block__swatch"
+          type="button"
+          data-toggle-block-colour-picker="${block.id}"
+          aria-label="Change ${escapeHtml(block.name)} colour"
+          aria-expanded="${isColourPickerOpen}"
+        ></button>
+        ${isColourPickerOpen ? /* html */ `
+          <div class="block-colour-palette" role="group" aria-label="Block colour palette">
+            ${BLOCK_COLOUR_PALETTE.map((colour) => `<button type="button" class="block-colour-palette__colour" data-block-colour="${block.id}" data-colour="${colour}" style="--colour: ${colour}" aria-label="${colour}"${colour === block.color ? " aria-pressed=\"true\"" : ""}></button>`).join("")}
+          </div>
+        ` : ""}
+      </div>
       ${block.id === editingBlockId
         ? `<input class="library-block__name-input" data-block-name-input="${block.id}" value="${escapeHtml(block.name)}" aria-label="Block name" />`
         : `<span class="library-block__name" data-block-name="${block.id}">${escapeHtml(block.name)}</span>`}
-      <input data-block-color="${block.id}" type="color" value="${block.color}" />
       <button type="button" data-delete-block="${block.id}">Delete</button>
       <button type="button" data-play-block="${index}"${state.is_playing ? " disabled" : ""}>Play</button>
     </div>
@@ -390,6 +426,7 @@ function timelinePane(state: ProjectState): string {
 }
 
 function canvasPane(state: ProjectState): string {
+  const isRecording = state.is_recording && !stoppingRecording;
   return /* html */ `
     <section class="canvas" aria-label="Recording and arrangement">
       ${timelinePane(state)}
@@ -407,15 +444,15 @@ function canvasPane(state: ProjectState): string {
         </div>
         <div class="canvas-actions">
           <button
-            class="icon-button icon-button--lg record-button${state.is_recording ? " record-button--active" : ""}"
+            class="icon-button icon-button--lg record-button${isRecording ? " record-button--active" : ""}"
             type="button"
             data-record
-            aria-pressed="${state.is_recording}"
-            aria-label="${state.is_recording ? "Stop recording" : "Record"}"
-            title="${state.is_recording ? "Stop (R)" : "Record (R)"}"
+            aria-pressed="${isRecording}"
+            aria-label="${isRecording ? "Stop recording" : "Record"}"
+            title="${isRecording ? "Stop (R)" : "Record (R)"}"
             ${state.is_playing ? "disabled" : ""}
           >
-            ${state.is_recording
+            ${isRecording
               ? `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" /></svg>`
               : `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="currentColor" /></svg>`}
           </button>
@@ -429,30 +466,34 @@ function canvasPane(state: ProjectState): string {
           >
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7 4l14 8-14 8V4z" fill="currentColor" /></svg>
           </button>
-          ${state.take ? /* html */ `
-            <select data-quantisation aria-label="Quantisation">
-              ${(["off", "whole", "half", "quarter", "eighth"] as Quantisation[]).map((value) => `<option value="${value}"${state.take?.quantisation === value ? " selected" : ""}>${value}</option>`).join("")}
-            </select>
-            <button
-              class="icon-button library-add-button"
-              type="button"
-              data-add-to-library
-              aria-label="Add take to library"
-              title="Add take to library"
-            >
-              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 5.5A1.5 1.5 0 0 1 6.5 4h11A1.5 1.5 0 0 1 19 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18.5v-13zM12 8v8m-4-4h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
-            </button>
-          ` : ""}
         </div>
       </div>
 
-      ${state.is_recording
+      ${isRecording
         ? liveNotes.length
           ? liveTakeGrid(liveNotes)
-          : `<span class="take-summary--empty">Listening for notes&hellip;</span>`
+          : emptyTakeGrid("Listening for notes\u2026", true)
         : state.take
           ? takeGrid(state)
-          : `<span class="take-summary--empty">Press Record to capture a take</span>`}
+          : emptyTakeGrid("Press Record to capture a take")}
+
+      ${state.take ? /* html */ `
+        <div class="take-options">
+          <label for="take-quantisation">Quantisation</label>
+          <select id="take-quantisation" data-quantisation aria-label="Quantisation">
+            ${(["off", "whole", "half", "quarter", "eighth"] as Quantisation[]).map((value) => `<option value="${value}"${state.take?.quantisation === value ? " selected" : ""}>${value}</option>`).join("")}
+          </select>
+          <button
+            class="library-add-button"
+            type="button"
+            data-add-to-library
+            aria-label="Add take to library"
+            title="Add take to library"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4.25 4.25L19 6.5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </button>
+        </div>
+      ` : ""}
     </section>
   `;
 }
@@ -535,7 +576,6 @@ function inspectorPane(state: ProjectState): string {
           ${midiConnectionMarkup()}
         </div>
         ${midiSelectMarkup()}
-        <button class="test-note" type="button" data-play-test-note>Play test note</button>
       </div>
     </aside>
   `;
@@ -680,15 +720,38 @@ async function setReverb(root: HTMLElement, reverb: number): Promise<void> {
  * button itself is the confirmation, per the user's call that recording
  * over a take should just happen, not interrupt the player with a dialog. */
 async function startRecording(root: HTMLElement): Promise<void> {
-  const applied = await applyCommand({ type: "startRecording" });
-  liveNotes = [];
-  render(root, applied.state);
+  if (startingRecording) return;
+  startingRecording = true;
+
+  // A newly pressed Record must follow a pending Stop. This makes Record
+  // available immediately without racing the native command that finalizes
+  // the previous Take.
+  try {
+    await stoppingRecording;
+    const applied = await applyCommand({ type: "startRecording" });
+    liveNotes = [];
+    render(root, applied.state);
+  } finally {
+    startingRecording = false;
+  }
 }
 
 async function endRecording(root: HTMLElement): Promise<void> {
-  const applied = await stopRecording();
+  if (stoppingRecording) return;
   liveNotes = [];
-  render(root, applied.state);
+  const pendingStop = stopRecording();
+  stoppingRecording = pendingStop;
+
+  // Stop changes the transport state immediately. The completed Take can
+  // arrive afterwards, without holding the Record control hostage.
+  if (currentState) render(root, { ...currentState, is_recording: false });
+
+  try {
+    const applied = await pendingStop;
+    render(root, applied.state);
+  } finally {
+    if (stoppingRecording === pendingStop) stoppingRecording = null;
+  }
 }
 
 /**
@@ -1407,19 +1470,6 @@ function showAudioStatus(root: HTMLElement, message: string, isError = false): v
   }
 }
 
-function wireTestNoteButton(root: HTMLElement): void {
-  root.addEventListener("click", (event) => {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
-      "[data-play-test-note]",
-    );
-    if (!button) return;
-
-    playTestNote()
-      .then(() => showAudioStatus(root, "played a test note"))
-      .catch((error: unknown) => showAudioStatus(root, `could not play a test note: ${String(error)}`, true));
-  });
-}
-
 // Rather than patching the MIDI `<select>` in the DOM out-of-band, this
 // writes into the same `midiStatus` the normal `render()` reads (see
 // `midiSelectMarkup`). Patching out-of-band used to get clobbered by the
@@ -1513,6 +1563,20 @@ function wireRecordingControls(root: HTMLElement): void {
     }
     const blockButton = target.closest<HTMLButtonElement>("[data-play-block]");
     if (blockButton) void playBlock(root, Number(blockButton.dataset.playBlock));
+    const colourPicker = target.closest<HTMLButtonElement>("[data-toggle-block-colour-picker]");
+    if (colourPicker?.dataset.toggleBlockColourPicker) {
+      const id = Number(colourPicker.dataset.toggleBlockColourPicker);
+      colourPickerBlockId = colourPickerBlockId === id ? null : id;
+      if (currentState) render(root, currentState);
+    }
+    const colourChoice = target.closest<HTMLButtonElement>("[data-block-colour]");
+    if (colourChoice?.dataset.blockColour && colourChoice.dataset.colour) {
+      colourPickerBlockId = null;
+      void applyCommand({
+        type: "recolourBlock",
+        payload: { id: Number(colourChoice.dataset.blockColour), color: colourChoice.dataset.colour },
+      }).then((applied) => render(root, applied.state));
+    }
     const deleteButton = target.closest<HTMLButtonElement>("[data-delete-block]");
     if (deleteButton) void deleteBlock(root, Number(deleteButton.dataset.deleteBlock));
   });
@@ -1573,12 +1637,6 @@ function wireRecordingControls(root: HTMLElement): void {
   });
 
   root.addEventListener("change", (event) => {
-    const color = event.target as HTMLInputElement;
-    if (!color.matches("[data-block-color]")) return;
-    void applyCommand({ type: "recolourBlock", payload: { id: Number(color.dataset.blockColor), color: color.value } }).then((applied) => render(root, applied.state));
-  });
-
-  root.addEventListener("change", (event) => {
     const input = event.target as HTMLInputElement;
     if (!input.matches("[data-trim-start], [data-trim-end]")) return;
     const start = root.querySelector<HTMLInputElement>("[data-trim-start]");
@@ -1634,7 +1692,6 @@ async function main(): Promise<void> {
   wireTempoControls(root);
   wireSoundControls(root);
   wireRecordingControls(root);
-  wireTestNoteButton(root);
   wireMidiPicker(root);
   wireUndoRedoKeys(root);
   wireQuitWarning(root);

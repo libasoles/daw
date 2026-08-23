@@ -144,6 +144,31 @@ const COMMAND_QUEUE_CAPACITY: usize = 256;
 /// overhead low.
 const RENDER_CHUNK_FRAMES: usize = 64;
 
+/// Length of the audible portion of a metronome strike. The very fast
+/// transient makes the beat cut through a dense instrument mix, while the
+/// short resonant tail keeps it from sounding like a digital glitch.
+const METRONOME_CLICK_DURATION_MS: u32 = 45;
+
+/// Generates a crisp, mechanical metronome strike. This deliberately avoids
+/// an external sample: it has no loading latency, works at every output sample
+/// rate, and gives the downbeat its own stronger, lower-pitched character.
+fn metronome_click_sample(elapsed_frames: usize, sample_rate: u32, accent: bool) -> f32 {
+    let time = elapsed_frames as f32 / sample_rate as f32;
+    let (body_frequency, body_gain) = if accent {
+        (1_450.0, 0.50)
+    } else {
+        (1_950.0, 0.36)
+    };
+
+    // The high-frequency, rapidly fading transient defines the attack; the
+    // body is the audible "tick" rather than the former square-wave buzz.
+    let transient = (std::f32::consts::TAU * 4_800.0 * time).sin() * (-time * 420.0).exp() * 0.22;
+    let body =
+        (std::f32::consts::TAU * body_frequency * time).sin() * (-time * 70.0).exp() * body_gain;
+
+    transient + body
+}
+
 /// Everything that can stop the audio engine from starting. Per the spec,
 /// none of these should crash the app — see `play_test_note` in
 /// `src-tauri/src/lib.rs`, which surfaces the equivalent at call time.
@@ -379,7 +404,7 @@ fn spawn_synth_thread(
         let mut last_metronome_pulse = None;
         let mut rendered_frames = 0u64;
         let mut click_frames_remaining = 0usize;
-        let mut click_amplitude = 0.0;
+        let mut click_is_accent = false;
         let mut schedule: Option<ActiveSchedule> = None;
         let mut held_from_schedule: Vec<u8> = Vec::new();
         let mut left = [0f32; RENDER_CHUNK_FRAMES];
@@ -482,25 +507,24 @@ fn spawn_synth_thread(
                     if pulse.is_multiple_of(PULSES_PER_BEAT) && last_metronome_pulse != Some(pulse)
                     {
                         last_metronome_pulse = Some(pulse);
-                        click_frames_remaining =
-                            usize::try_from(sample_rate / 125).unwrap_or(1).max(1);
-                        click_amplitude = if is_bar_accent(pulse, time_signature) {
-                            0.35
-                        } else {
-                            0.2
-                        };
+                        click_frames_remaining = usize::try_from(
+                            sample_rate.saturating_mul(METRONOME_CLICK_DURATION_MS) / 1_000,
+                        )
+                        .unwrap_or(1)
+                        .max(1);
+                        click_is_accent = is_bar_accent(pulse, time_signature);
                     }
                 }
 
                 if click_frames_remaining != 0 {
-                    // A short alternating, decaying impulse is enough to be
-                    // audible as a click without another audio dependency.
-                    let click = if click_frames_remaining.is_multiple_of(2) {
-                        click_amplitude
-                    } else {
-                        -click_amplitude
-                    } * (click_frames_remaining as f32
-                        / (sample_rate / 125).max(1) as f32);
+                    let click_length = usize::try_from(
+                        sample_rate.saturating_mul(METRONOME_CLICK_DURATION_MS) / 1_000,
+                    )
+                    .unwrap_or(1)
+                    .max(1);
+                    let elapsed_frames = click_length.saturating_sub(click_frames_remaining);
+                    let click =
+                        metronome_click_sample(elapsed_frames, sample_rate, click_is_accent);
                     *l += click;
                     *r += click;
                     click_frames_remaining -= 1;
