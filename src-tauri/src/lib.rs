@@ -617,7 +617,10 @@ fn audio_status(app: AppHandle) -> AudioStatus {
     let engine = app.state::<AudioEngineHandle>();
     let engine = engine.0.lock().expect("audio engine mutex poisoned");
     if engine.is_some() {
-        AudioStatus { available: true, message: "audio ready".to_string() }
+        AudioStatus {
+            available: true,
+            message: "audio ready".to_string(),
+        }
     } else {
         AudioStatus {
             available: false,

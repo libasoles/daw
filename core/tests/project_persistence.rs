@@ -1,4 +1,6 @@
-use daw_core::{ports::MemoryStorage, ports::Storage, Command, DawCore, Effect, RecordedNote, Take};
+use daw_core::{
+    ports::MemoryStorage, ports::Storage, Command, DawCore, Effect, RecordedNote, Take,
+};
 
 #[test]
 fn opening_a_saved_project_restores_every_setting_and_every_block() {

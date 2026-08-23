@@ -862,12 +862,12 @@ async function startRecording(root: HTMLElement): Promise<void> {
     await stoppingRecording;
     const applied = await applyCommand({ type: "startRecording" });
     liveNotes = [];
-    // Mirrors `recording.rs`'s `begin_session`: the anchor (pulse zero)
-    // opens immediately, or after one bar's count-in when that's enabled.
-    const countInPulses = applied.state.count_in_enabled
-      ? applied.state.time_signature[0] * PULSES_PER_BEAT
-      : 0;
-    liveRecordingAnchorMs = Date.now() + pulseElapsedMs(countInPulses, applied.state.bpm);
+    // The anchor itself (pulse zero) is set by `runLivePlayhead`'s
+    // "recording-anchor" listener, from the backend's own wall-clock read —
+    // not computed here from `Date.now()`, which (taken only after this
+    // command's IPC round trip resolves) would lag the clock actually used
+    // to timestamp incoming notes and make the playhead trail them.
+    liveRecordingAnchorMs = null;
     render(root, applied.state);
     runLivePlayhead(root);
   } finally {
@@ -904,14 +904,19 @@ function runLivePlayhead(root: HTMLElement): void {
   if (livePlayheadFrame !== null) return;
   const tick = (): void => {
     livePlayheadFrame = null;
-    if (!currentState?.is_recording || liveRecordingAnchorMs === null) return;
-    const elapsedMs = Date.now() - liveRecordingAnchorMs;
-    if (elapsedMs >= 0) {
-      const line = root.querySelector<HTMLElement>("[data-live-playhead]");
-      if (line) {
-        const pulses = elapsedMs / pulseElapsedMs(1, currentState.bpm);
-        line.style.transform = `translateX(${pulses * takeZoomPxPerPulse}px)`;
-        syncLiveTakeScroll(root, currentState);
+    if (!currentState?.is_recording) return;
+    // `liveRecordingAnchorMs` stays null while a count-in is still playing
+    // (the backend's "recording-anchor" event hasn't arrived yet) — keep
+    // polling rather than stopping, so the playhead starts the instant it does.
+    if (liveRecordingAnchorMs !== null) {
+      const elapsedMs = Date.now() - liveRecordingAnchorMs;
+      if (elapsedMs >= 0) {
+        const line = root.querySelector<HTMLElement>("[data-live-playhead]");
+        if (line) {
+          const pulses = elapsedMs / pulseElapsedMs(1, currentState.bpm);
+          line.style.transform = `translateX(${pulses * takeZoomPxPerPulse}px)`;
+          syncLiveTakeScroll(root, currentState);
+        }
       }
     }
     livePlayheadFrame = requestAnimationFrame(tick);
@@ -1004,6 +1009,22 @@ interface LiveNoteEvent {
   velocity: number;
   pulse: number;
   is_on: boolean;
+}
+
+/** Listens for the backend's "recording-anchor" event — the wall-clock
+ * instant (epoch ms) `recording.rs`'s `open_anchor` set as pulse zero for the
+ * take being captured, emitted the moment it's set. Driving
+ * `liveRecordingAnchorMs` from this event, rather than a `Date.now()` read
+ * taken locally after `StartRecording`'s IPC round trip resolves, keeps the
+ * live playhead (`runLivePlayhead`) anchored to the same instant that times
+ * incoming notes (`wireLiveNoteFeed`) — otherwise the round trip's latency
+ * makes the playhead start late and visibly trail newly captured notes. */
+function wireRecordingAnchorFeed(root: HTMLElement): void {
+  listen<number>("recording-anchor", (event) => {
+    if (!currentState?.is_recording) return;
+    liveRecordingAnchorMs = event.payload;
+    runLivePlayhead(root);
+  }).catch((error: unknown) => console.error("could not listen for recording-anchor:", error));
 }
 
 /** Live counterpart to `wireRecordingControls`: listens for the backend's
@@ -1963,6 +1984,7 @@ async function main(): Promise<void> {
   wireBlockPlacementDragAndDrop(root);
   wireTimelineSelection(root);
   wireLayoutControls(root);
+  wireRecordingAnchorFeed(root);
   wireLiveNoteFeed(root);
   await refreshMidiDevices(root);
   window.setInterval(() => void refreshMidiDevices(root), 1_000);

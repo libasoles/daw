@@ -8,7 +8,7 @@
 
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use daw_core::ports::MidiEventKind;
 use daw_core::{
@@ -94,11 +94,29 @@ fn sync_audio_engine(app: &AppHandle, state: &ProjectState, metronome_enabled: b
     }
 }
 
+/// Sets the session's `Instant` anchor and, in the same breath, emits its
+/// wall-clock equivalent so the frontend's playhead can start from the exact
+/// moment used to time incoming notes — rather than a `Date.now()` read taken
+/// after the `StartRecording` command's IPC round trip, which lags this
+/// instant by the round trip's latency and made the playhead visibly trail
+/// newly captured notes.
 fn open_anchor(app: &AppHandle) {
     let handle = app.state::<RecordingHandle>();
-    let mut guard = handle.0.lock().expect("recording mutex poisoned");
-    if let Some(session) = guard.as_mut() {
-        session.anchor = Some(Instant::now());
+    let opened = {
+        let mut guard = handle.0.lock().expect("recording mutex poisoned");
+        if let Some(session) = guard.as_mut() {
+            session.anchor = Some(Instant::now());
+            true
+        } else {
+            false
+        }
+    };
+    if opened {
+        let anchor_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let _ = app.emit("recording-anchor", anchor_ms);
     }
 }
 
