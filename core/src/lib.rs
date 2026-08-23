@@ -478,16 +478,10 @@ pub enum Command {
     /// Arms recording. Not itself undoable — arming isn't a musical edit, the
     /// take that results from it is (see [`Command::StopRecording`]).
     ///
-    /// If the recording area already holds a take and `force` is `false`,
-    /// this reports [`Effect::ConfirmOverwriteRecording`] and leaves
-    /// `is_recording` untouched, per the spec's "recording over a take that
-    /// has not been added to the library asks for confirmation first" — the
-    /// library (#11) doesn't exist yet, so every existing take counts.
-    /// Resending with `force: true` (after the shell has confirmed with the
-    /// user) proceeds unconditionally. A missing take never needs `force`.
-    StartRecording {
-        force: bool,
-    },
+    /// Silently replaces any take already in the recording area — recording
+    /// over one is not a confirmed action, the record button itself is the
+    /// commitment.
+    StartRecording,
     /// Finishes recording, replacing the recording area's take with `take`.
     /// The shell builds `take` from the raw MIDI it captured — the core
     /// performs no I/O and cannot listen for MIDI itself. Always sent as
@@ -640,10 +634,6 @@ pub enum Effect {
     /// The selected MIDI input is unavailable. This is a shell-originated
     /// status, reported through the same effect vocabulary as other feedback.
     NoMidiDeviceAvailable,
-    /// `StartRecording { force: false }` was applied while the recording
-    /// area already held a take. The shell should ask the user to confirm,
-    /// then resend `StartRecording { force: true }` if they agree.
-    ConfirmOverwriteRecording,
     /// `NewProject { force: false }` or `OpenProject { force: false, .. }`
     /// was applied against a project with unsaved changes. The shell should
     /// offer to save, discard or cancel, then resend the same command with
@@ -851,13 +841,9 @@ impl DawCore {
                 // undo/redo aimed at music, like reverb/metronome/count-in.
                 Vec::new()
             }
-            Command::StartRecording { force } => {
-                if self.state.take.is_some() && !force {
-                    vec![Effect::ConfirmOverwriteRecording]
-                } else {
-                    self.state.is_recording = true;
-                    Vec::new()
-                }
+            Command::StartRecording => {
+                self.state.is_recording = true;
+                Vec::new()
             }
             Command::StopRecording(take) => {
                 self.state.is_recording = false;
@@ -1360,7 +1346,7 @@ impl DawCore {
             | Command::SetMetronomeEnabled(_)
             | Command::SetCountInEnabled(_)
             | Command::SetLoopEnabled(_)
-            | Command::StartRecording { .. }
+            | Command::StartRecording
             | Command::PlayTake
             | Command::PlayBlock(_)
             | Command::AddPlacement { .. }

@@ -676,27 +676,11 @@ async function setReverb(root: HTMLElement, reverb: number): Promise<void> {
   await applyCommand({ type: "setReverb", payload: value });
 }
 
-/**
- * Arms recording. If the recording area already holds a take, the core
- * reports `confirmOverwriteRecording` and leaves recording off; this asks
- * the user to confirm, then resends with `force: true` if they agree, per
- * the spec's "recording over a take that has not been added to the library
- * asks for confirmation first."
- */
+/** Arms recording. Replacing an existing take is not confirmed — the record
+ * button itself is the confirmation, per the user's call that recording
+ * over a take should just happen, not interrupt the player with a dialog. */
 async function startRecording(root: HTMLElement): Promise<void> {
-  const applied = await applyCommand({ type: "startRecording", payload: { force: false } });
-  const needsConfirmation = applied.effects.some(
-    (effect) => effect.type === "confirmOverwriteRecording",
-  );
-  if (needsConfirmation) {
-    render(root, applied.state);
-    if (!window.confirm("Recording will replace the current take. Continue?")) {
-      return;
-    }
-    const forced = await applyCommand({ type: "startRecording", payload: { force: true } });
-    render(root, forced.state);
-    return;
-  }
+  const applied = await applyCommand({ type: "startRecording" });
   liveNotes = [];
   render(root, applied.state);
 }

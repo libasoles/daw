@@ -82,7 +82,7 @@ export type Command =
   | { type: "setMetronomeEnabled"; payload: boolean }
   | { type: "setCountInEnabled"; payload: boolean }
   | { type: "setLoopEnabled"; payload: boolean }
-  | { type: "startRecording"; payload: { force: boolean } }
+  | { type: "startRecording" }
   | { type: "setTakeTrim"; payload: { start_pulse: number; end_pulse: number } }
   | { type: "setTakeQuantisation"; payload: Quantisation }
   | { type: "addTakeToLibrary" }
@@ -107,7 +107,6 @@ export type Effect =
   | { type: "nothingToUndo" }
   | { type: "nothingToRedo" }
   | { type: "noMidiDeviceAvailable" }
-  | { type: "confirmOverwriteRecording" }
   | { type: "confirmDiscardUnsavedChanges" }
   | { type: "confirmDeleteBlockInUse"; uses: number }
   | { type: "saveProject"; name: string; document: ProjectState }

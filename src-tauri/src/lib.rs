@@ -92,7 +92,7 @@ fn apply_command(app: AppHandle, command: Command) -> Applied {
 /// to the audio engine, and carries out any effect the core asked for that
 /// the shell — not the webview — is responsible for.
 fn dispatch(app: &AppHandle, command: Command) -> Applied {
-    let starting_recording = matches!(command, Command::StartRecording { .. });
+    let starting_recording = matches!(command, Command::StartRecording);
     let opening_new_project = matches!(command, Command::NewProject { .. });
     // Only timeline playback (issue #19) may loop; an isolated take or
     // block never does, whatever the project's loop setting is.

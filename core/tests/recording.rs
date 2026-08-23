@@ -121,7 +121,7 @@ fn tempo_governs_how_captured_wall_clock_time_maps_to_pulses() {
 #[test]
 fn stop_recording_replaces_the_take_and_is_undoable() {
     let mut core = DawCore::new();
-    core.apply(Command::StartRecording { force: false });
+    core.apply(Command::StartRecording);
 
     let take = Take::from_raw_notes(vec![RecordedNote {
         pitch: 60,
@@ -150,7 +150,7 @@ fn stop_recording_replaces_the_take_and_is_undoable() {
 }
 
 #[test]
-fn recording_over_an_existing_take_asks_for_confirmation_first() {
+fn starting_recording_over_an_existing_take_replaces_it_without_confirmation() {
     let mut core = DawCore::new();
     let take = Take::from_raw_notes(vec![RecordedNote {
         pitch: 60,
@@ -158,24 +158,22 @@ fn recording_over_an_existing_take_asks_for_confirmation_first() {
         start_pulse: 0,
         end_pulse: 4,
     }]);
-    core.apply(Command::StartRecording { force: false });
+    core.apply(Command::StartRecording);
     core.apply(Command::StopRecording(Some(take.clone())));
 
-    let refused = core.apply(Command::StartRecording { force: false });
-    assert_eq!(refused.effects, vec![Effect::ConfirmOverwriteRecording]);
-    assert!(!refused.state.is_recording);
-    assert_eq!(refused.state.take, Some(take));
-
-    let forced = core.apply(Command::StartRecording { force: true });
-    assert_eq!(forced.effects, Vec::<Effect>::new());
-    assert!(forced.state.is_recording);
+    let applied = core.apply(Command::StartRecording);
+    assert_eq!(applied.effects, Vec::<Effect>::new());
+    assert!(applied.state.is_recording);
+    // The take stays in place until `StopRecording` overwrites it — arming
+    // is not itself the moment the previous take disappears.
+    assert_eq!(applied.state.take, Some(take));
 }
 
 #[test]
-fn starting_recording_with_no_existing_take_never_needs_confirmation() {
+fn starting_recording_with_no_existing_take_arms_it() {
     let mut core = DawCore::new();
 
-    let applied = core.apply(Command::StartRecording { force: false });
+    let applied = core.apply(Command::StartRecording);
 
     assert_eq!(applied.effects, Vec::<Effect>::new());
     assert!(applied.state.is_recording);
@@ -190,7 +188,7 @@ fn playing_a_take_reports_a_schedule_and_marks_playback_active() {
         start_pulse: 0,
         end_pulse: 4,
     }]);
-    core.apply(Command::StartRecording { force: false });
+    core.apply(Command::StartRecording);
     core.apply(Command::StopRecording(Some(take.clone())));
 
     let applied = core.apply(Command::PlayTake);
