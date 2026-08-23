@@ -150,6 +150,17 @@ body {
   flex: none;
 }
 
+.project-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.project-actions .icon-button {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
 .project-menu {
   display: flex;
   align-items: center;
@@ -252,7 +263,6 @@ body {
   text-align: left;
 }
 
-.project-controls__actions,
 .project-controls__name,
 .project-controls__list {
   display: flex;
@@ -275,7 +285,6 @@ body {
   color: var(--ink-faint);
 }
 
-.project-controls__status,
 .project-controls__empty {
   color: var(--ink-dim);
   font-size: var(--text-xs);
@@ -947,6 +956,11 @@ body {
   background: var(--surface-raised);
 }
 
+.timeline__controls {
+  display: flex;
+  align-items: center;
+}
+
 .timeline-grid {
   display: block;
 }
@@ -1016,6 +1030,19 @@ body {
   animation-name: timeline-playhead-move;
   animation-timing-function: linear;
   animation-fill-mode: forwards;
+}
+
+/* Take playback: positioned by `runTakePlayhead`'s requestAnimationFrame
+   loop, not a CSS animation like the timeline playhead above — that loop
+   also drives auto-scroll once the line reaches the take editor's edge. */
+.take-playhead {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2px;
+  height: 88px;
+  background: var(--accent);
+  will-change: transform;
 }
 
 /* --- The app's one modal dialog (issue #14): warns before discarding

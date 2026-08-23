@@ -114,6 +114,13 @@ let liveRecordingAnchorMs: number | null = null;
  * scheduled, so starting a new recording never stacks a second loop on top
  * of one still running. */
 let livePlayheadFrame: number | null = null;
+/** Wall-clock moment corresponding to pulse zero of the take currently
+ * playing back — set when `playTake` starts it, read by `runTakePlayhead`.
+ * `null` outside take playback. */
+let takePlaybackAnchorMs: number | null = null;
+/** Non-null while `runTakePlayhead`'s `requestAnimationFrame` loop is
+ * scheduled, mirroring `livePlayheadFrame`. */
+let takePlayheadFrame: number | null = null;
 
 /**
  * A "new project" / "switch project" / "quit" the user asked for while there
@@ -154,21 +161,15 @@ function takeEndPulse(state: ProjectState): number {
 }
 
 /**
- * A visible marker of playback position while the current take plays back
- * (mirrors `timelinePlayhead`'s fixed-duration CSS animation — a take's
- * playback length is known up front, unlike a live recording's, which is
- * why that one uses `runLivePlayhead`'s `requestAnimationFrame` loop
- * instead). Travels over `take.notes`' resolved span — trim and
- * quantisation applied — since that's what actually gets scheduled to
- * play, matching the `length` `playTake` uses for `schedulePlaybackRefresh`.
+ * A visible marker of playback position while the current take plays back.
+ * Positioned by `runTakePlayhead`'s `requestAnimationFrame` loop rather than
+ * a fixed-duration CSS animation (contrast `timelinePlayhead`) so that loop
+ * can also drive auto-scroll once the line reaches the take editor's right
+ * edge — a CSS animation has no hook to notice that happening.
  */
 function takePlayhead(state: ProjectState): string {
-  const take = state.take;
-  if (!take || !state.is_playing || !takePlaybackActive) return "";
-  const length = take.notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
-  const distance = length * 32;
-  const durationMs = pulseElapsedMs(length, state.bpm);
-  return `<div class="take-playhead" style="--playhead-distance: ${distance}px; animation-duration: ${durationMs}ms;" aria-hidden="true"></div>`;
+  if (!state.take || !state.is_playing || !takePlaybackActive) return "";
+  return `<div class="take-playhead" data-take-playhead aria-hidden="true"></div>`;
 }
 
 function takeGrid(state: ProjectState): string {
@@ -316,15 +317,9 @@ function renderSplash(root: HTMLElement): void {
   `;
 }
 
-function projectControlsPanel(state: ProjectState): string {
+function projectControlsPanel(): string {
   return /* html */ `
     <section class="project-controls" aria-label="Projects">
-      <div class="project-controls__actions">
-        <button type="button" data-new-project>New project</button>
-        <button type="button" data-save-project ${state.is_dirty ? "" : "disabled"}>Save</button>
-        <button type="button" data-new-project>New project</button>
-        <span class="project-controls__status">${state.is_dirty ? "Unsaved changes" : "All changes saved"}</span>
-      </div>
       ${isNamingProject ? /* html */ `
         <form class="project-controls__name" data-project-name-form>
           <label>Project name <input data-project-name required autocomplete="off" /></label>
@@ -352,7 +347,15 @@ function topbar(state: ProjectState): string {
           <span class="project-menu__label">${activeProjectName ? escapeHtml(activeProjectName) : "Unsaved project"}</span>
           <span class="project-menu__caret">&#9662;</span>
         </button>
-        ${menuOpen ? projectControlsPanel(state) : ""}
+        ${menuOpen ? projectControlsPanel() : ""}
+      </div>
+      <div class="project-actions" aria-label="Project actions">
+        <button class="icon-button" type="button" data-new-project aria-label="New project" title="New project">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 6.5A1.5 1.5 0 0 1 5.5 5H10l2 2h6.5A1.5 1.5 0 0 1 20 8.5v10a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-12zM12 10v6m-3-3h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        </button>
+        <button class="icon-button" type="button" data-save-project aria-label="Save project" title="Save project" ${state.is_dirty ? "" : "disabled"}>
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M5 4h12l3 3v13H5V4zm3 0v6h8V4m-7 16v-6h6v6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" /></svg>
+        </button>
       </div>
       <div class="topbar-spacer" data-tauri-drag-region></div>
       <div class="transport">
@@ -481,10 +484,6 @@ function timelinePane(state: ProjectState): string {
           ${state.is_playing && timelinePlaybackActive ? "Stop (Space)" : "Play timeline (Space)"}
         </button>
         <button class="timeline__export" type="button" data-export-midi>Export .mid</button>
-        <label class="pulse-toggle">
-          <input type="checkbox" data-loop-enabled${state.loop_enabled ? " checked" : ""} />
-          <span>Loop</span>
-        </label>
         <div class="timeline__zoom" role="group" aria-label="Timeline zoom">
           <button type="button" data-timeline-zoom="overview" aria-pressed="${timelineZoom === "overview"}">Overview</button>
           <button type="button" data-timeline-zoom="normal" aria-pressed="${timelineZoom === "normal"}">Normal</button>
@@ -497,6 +496,12 @@ function timelinePane(state: ProjectState): string {
           <div class="timeline__placements">${timelinePlacements(state)}</div>
           ${timelinePlayhead(state)}
         </div>
+      </div>
+      <div class="timeline__controls">
+        <label class="pulse-toggle">
+          <input type="checkbox" data-loop-enabled${state.loop_enabled ? " checked" : ""} />
+          <span>Loop</span>
+        </label>
       </div>
     </section>
   `;
@@ -692,6 +697,7 @@ function render(root: HTMLElement, state: ProjectState): void {
   if (!state.is_playing) {
     playingBlockIndex = null;
     takePlaybackActive = false;
+    takePlaybackAnchorMs = null;
   }
   root.innerHTML = /* html */ `
     <div class="app-shell">
@@ -874,6 +880,32 @@ function runLivePlayhead(root: HTMLElement): void {
   livePlayheadFrame = requestAnimationFrame(tick);
 }
 
+/** Moves the take editor's playhead during take playback, and auto-scrolls
+ * to follow it once it reaches the right edge — same technique as
+ * `runLivePlayhead`, and for the same reason: a CSS animation (as
+ * `timelinePlayhead` uses, where nothing needs to scroll) has no hook to
+ * drive scrolling when the line crosses the visible edge. Self-terminates
+ * once playback stops. */
+function runTakePlayhead(root: HTMLElement): void {
+  if (takePlayheadFrame !== null) return;
+  const tick = (): void => {
+    takePlayheadFrame = null;
+    if (!currentState?.is_playing || !takePlaybackActive || takePlaybackAnchorMs === null) return;
+    const elapsedMs = Date.now() - takePlaybackAnchorMs;
+    if (elapsedMs >= 0) {
+      const line = root.querySelector<HTMLElement>("[data-take-playhead]");
+      if (line) {
+        const pulses = elapsedMs / pulseElapsedMs(1, currentState.bpm);
+        line.style.transform = `translateX(${pulses * 32}px)`;
+        const editor = line.parentElement;
+        if (editor) editor.scrollLeft = Math.max(editor.scrollLeft, pulses * 32 - editor.clientWidth + 40);
+      }
+    }
+    takePlayheadFrame = requestAnimationFrame(tick);
+  };
+  takePlayheadFrame = requestAnimationFrame(tick);
+}
+
 /**
  * Deletes a library block (issue #23) — the application's one destructive
  * path across the two areas. If the block is used on the timeline, the core
@@ -969,6 +1001,7 @@ function wireLiveNoteFeed(root: HTMLElement): void {
 async function playTake(root: HTMLElement): Promise<void> {
   const applied = await applyCommand({ type: "playTake" });
   takePlaybackActive = applied.state.is_playing;
+  takePlaybackAnchorMs = applied.state.is_playing ? Date.now() : null;
   render(root, applied.state);
   if (applied.state.is_playing && applied.state.take) {
     // Playback schedules the take's *resolved* view (trim + quantisation
@@ -976,6 +1009,7 @@ async function playTake(root: HTMLElement): Promise<void> {
     // so the refresh timer has to match that, not `takeEndPulse`'s raw span.
     const length = applied.state.take.notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
     schedulePlaybackRefresh(root, length, applied.state.bpm);
+    runTakePlayhead(root);
   }
 }
 
@@ -1025,6 +1059,7 @@ async function playTimeline(root: HTMLElement): Promise<void> {
 async function stopCurrentPlayback(root: HTMLElement): Promise<void> {
   timelinePlaybackActive = false;
   takePlaybackActive = false;
+  takePlaybackAnchorMs = null;
   const applied = await stopPlayback();
   render(root, applied.state);
 }
