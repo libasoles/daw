@@ -20,7 +20,8 @@
         "resizable": true,
         "theme": "Dark",
         "titleBarStyle": "Overlay",
-        "backgroundColor": "#0d0f12"
+        "backgroundColor": "#0d0f12",
+        "dragDropEnabled": false
       }
     ],
     "security": {

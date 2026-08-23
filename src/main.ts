@@ -104,6 +104,16 @@ let startingRecording = false;
  * whenever a recording starts or ends, since `state.take` only reflects the
  * finished take once recording stops. */
 let liveNotes: RecordedNote[] = [];
+/** Wall-clock moment (per `Date.now()`) corresponding to pulse zero of the
+ * take currently being recorded — set once `startRecording` resolves, offset
+ * by the count-in so the live playhead (see `runLivePlayhead`) doesn't start
+ * moving until the count-in has actually finished, matching where
+ * `recording.rs` opens its own anchor. `null` outside recording. */
+let liveRecordingAnchorMs: number | null = null;
+/** Non-null while `runLivePlayhead`'s `requestAnimationFrame` loop is
+ * scheduled, so starting a new recording never stacks a second loop on top
+ * of one still running. */
+let livePlayheadFrame: number | null = null;
 
 /**
  * A "new project" / "switch project" / "quit" the user asked for while there
@@ -126,6 +136,14 @@ let pendingRecovery: RecoverySnapshot | null = null;
  * block's own "Play" button — `state.is_playing` alone doesn't say which
  * one is running, since all three share one flag. */
 let timelinePlaybackActive = false;
+/** Index of the library block whose own "Play" button started the current
+ * playback, so that block's button alone can show "Stop" — `state.is_playing`
+ * alone doesn't say which of a take, a block, or the timeline is running. */
+let playingBlockIndex: number | null = null;
+/** Set only while this session itself started take playback, so the take's
+ * own "Play" button can show "Stop" and its playhead can appear — same
+ * reasoning as `timelinePlaybackActive` and `playingBlockIndex`. */
+let takePlaybackActive = false;
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>'"]/g, (character) => `&#${character.charCodeAt(0)};`);
@@ -133,6 +151,24 @@ function escapeHtml(value: string): string {
 
 function takeEndPulse(state: ProjectState): number {
   return state.take?.raw_notes.reduce((end, note) => Math.max(end, note.end_pulse), 0) ?? 0;
+}
+
+/**
+ * A visible marker of playback position while the current take plays back
+ * (mirrors `timelinePlayhead`'s fixed-duration CSS animation — a take's
+ * playback length is known up front, unlike a live recording's, which is
+ * why that one uses `runLivePlayhead`'s `requestAnimationFrame` loop
+ * instead). Travels over `take.notes`' resolved span — trim and
+ * quantisation applied — since that's what actually gets scheduled to
+ * play, matching the `length` `playTake` uses for `schedulePlaybackRefresh`.
+ */
+function takePlayhead(state: ProjectState): string {
+  const take = state.take;
+  if (!take || !state.is_playing || !takePlaybackActive) return "";
+  const length = take.notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
+  const distance = length * 32;
+  const durationMs = pulseElapsedMs(length, state.bpm);
+  return `<div class="take-playhead" style="--playhead-distance: ${distance}px; animation-duration: ${durationMs}ms;" aria-hidden="true"></div>`;
 }
 
 function takeGrid(state: ProjectState): string {
@@ -148,7 +184,7 @@ function takeGrid(state: ProjectState): string {
   ).join("");
   const startPct = end > 0 ? (take.trim.start_pulse / end) * 100 : 0;
   const endPct = end > 0 ? (take.trim.end_pulse / end) * 100 : 0;
-  return `<div class="take-editor"><svg viewBox="0 0 ${width} 88" aria-label="Take notes against the pulse grid"><g class="take-grid">${lines}</g><g class="take-notes">${notes}</g></svg><div class="take-trim-handles" aria-label="Trim handles"><input class="take-trim-handle take-trim-handle--start" type="range" data-trim-start min="0" max="${end}" step="1" value="${take.trim.start_pulse}" style="--pct: ${startPct}%" aria-label="Trim start" /><input class="take-trim-handle take-trim-handle--end" type="range" data-trim-end min="0" max="${end}" step="1" value="${take.trim.end_pulse}" style="--pct: ${endPct}%" aria-label="Trim end" /></div></div>`;
+  return `<div class="take-editor"><svg viewBox="0 0 ${width} 88" preserveAspectRatio="xMinYMid meet" aria-label="Take notes against the pulse grid"><g class="take-grid">${lines}</g><g class="take-notes">${notes}</g></svg>${takePlayhead(state)}<div class="take-trim-handles" aria-label="Trim handles"><input class="take-trim-handle take-trim-handle--start" type="range" data-trim-start min="0" max="${end}" step="1" value="${take.trim.start_pulse}" style="--pct: ${startPct}%" aria-label="Trim start" /><input class="take-trim-handle take-trim-handle--end" type="range" data-trim-end min="0" max="${end}" step="1" value="${take.trim.end_pulse}" style="--pct: ${endPct}%" aria-label="Trim end" /></div></div>`;
 }
 
 /**
@@ -226,25 +262,44 @@ function timelinePlayhead(state: ProjectState): string {
   return `<div class="timeline-playhead" style="--playhead-distance: ${distance}px; animation-duration: ${durationMs}ms; animation-iteration-count: ${iterationCount};" aria-hidden="true"></div>`;
 }
 
+/** How many pulses have elapsed since `liveRecordingAnchorMs` — the live
+ * playhead's current position, computed the same way `runLivePlayhead`
+ * derives it per animation frame. Also used to size the live take grid
+ * itself (see `liveTakeGrid`) so it grows with real time passing, not just
+ * with notes landing — otherwise the grid stays exactly as wide as the last
+ * note until the next one arrives, and the playhead runs off its right edge
+ * and sits clipped until that next note snaps the grid (and the scroll)
+ * forward to catch up, reading as a sudden burst of speed. */
+function liveElapsedPulses(bpm: number): number {
+  if (liveRecordingAnchorMs === null) return 0;
+  const elapsedMs = Date.now() - liveRecordingAnchorMs;
+  return elapsedMs > 0 ? elapsedMs / pulseElapsedMs(1, bpm) : 0;
+}
+
 /** Notes as they're captured mid-recording, from `liveNotes` — same visual
  * language as `takeGrid` but no trim handles, since there is no finished
- * take yet to trim. The grid grows to fit the furthest note played so far. */
-function liveTakeGrid(notes: RecordedNote[]): string {
-  const end = notes.reduce((max, note) => Math.max(max, note.end_pulse), 0);
+ * take yet to trim. The grid grows to fit the furthest note played so far,
+ * or the live playhead's current position, whichever is further. */
+function liveTakeGrid(notes: RecordedNote[], bpm: number): string {
+  const notesEnd = notes.reduce((max, note) => Math.max(max, note.end_pulse), 0);
+  const end = Math.max(notesEnd, liveElapsedPulses(bpm));
   const width = Math.max(end, 1) * 32;
-  const lines = Array.from({ length: end + 1 }, (_, pulse) =>
+  const lineCount = Math.ceil(end) + 1;
+  const lines = Array.from({ length: lineCount }, (_, pulse) =>
     `<line x1="${pulse * 32}" y1="0" x2="${pulse * 32}" y2="88" />`,
   ).join("");
   const rects = notes.map((note) =>
     `<rect x="${note.start_pulse * 32}" y="${72 - note.pitch % 5 * 12}" width="${Math.max(2, (note.end_pulse - note.start_pulse) * 32)}" height="9" rx="2" />`,
   ).join("");
-  return `<div class="take-editor take-editor--live"><svg viewBox="0 0 ${width} 88" aria-label="Notes captured so far"><g class="take-grid">${lines}</g><g class="take-notes take-notes--live">${rects}</g></svg></div>`;
+  const message = notes.length === 0
+    ? `<span class="take-editor__empty-message">Listening for notes…</span>`
+    : "";
+  return `<div class="take-editor take-editor--live" data-live-take-editor><svg viewBox="0 0 ${width} 88" preserveAspectRatio="xMinYMid meet" aria-label="Notes captured so far"><g class="take-grid">${lines}</g><g class="take-notes take-notes--live">${rects}</g></svg><div class="take-live-playhead" data-live-playhead aria-hidden="true"></div>${message}</div>`;
 }
 
-/** Keeps the take editor's note strip in the layout before a take exists and
- * while a recording has not received its first note. */
-function emptyTakeGrid(message: string, isRecording = false): string {
-  return `<div class="take-editor take-editor--empty${isRecording ? " take-editor--live" : ""}"><svg viewBox="0 0 32 88" aria-label="${escapeHtml(message)}"><g class="take-grid"><line x1="0" y1="0" x2="0" y2="88" /><line x1="32" y1="0" x2="32" y2="88" /></g></svg><span class="take-editor__empty-message">${escapeHtml(message)}</span></div>`;
+/** Keeps the take editor's note strip in the layout before a take exists. */
+function emptyTakeGrid(message: string): string {
+  return `<div class="take-editor take-editor--empty"><svg viewBox="0 0 32 88" aria-label="${escapeHtml(message)}"><g class="take-grid"><line x1="0" y1="0" x2="0" y2="88" /><line x1="32" y1="0" x2="32" y2="88" /></g></svg><span class="take-editor__empty-message">${escapeHtml(message)}</span></div>`;
 }
 
 /** Shown once at boot, while the first `fetchProjectState()` is in flight.
@@ -346,6 +401,7 @@ const BLOCK_COLOUR_PALETTE = [
 
 function libraryBlock(state: ProjectState, block: Block, index: number): string {
   const isColourPickerOpen = colourPickerBlockId === block.id;
+  const isPlayingThisBlock = state.is_playing && playingBlockIndex === index;
   return /* html */ `
     <div class="library-block" style="--block-color: ${block.color}" draggable="true" data-drag-block="${block.id}">
       <div class="library-block__colour-picker">
@@ -365,8 +421,29 @@ function libraryBlock(state: ProjectState, block: Block, index: number): string 
       ${block.id === editingBlockId
         ? `<input class="library-block__name-input" data-block-name-input="${block.id}" value="${escapeHtml(block.name)}" aria-label="Block name" />`
         : `<span class="library-block__name" data-block-name="${block.id}">${escapeHtml(block.name)}</span>`}
-      <button type="button" data-delete-block="${block.id}">Delete</button>
-      <button type="button" data-play-block="${index}"${state.is_playing ? " disabled" : ""}>Play</button>
+      <div class="library-block__actions">
+        <button
+          class="icon-button"
+          type="button"
+          data-delete-block="${block.id}"
+          aria-label="Delete ${escapeHtml(block.name)}"
+          title="Delete"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 7h12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-8 0 1 13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        </button>
+        <button
+          class="icon-button"
+          type="button"
+          data-play-block="${index}"
+          aria-label="${isPlayingThisBlock ? "Stop" : "Play"} ${escapeHtml(block.name)}"
+          title="${isPlayingThisBlock ? "Stop" : "Play"}"
+          ${state.is_playing && !isPlayingThisBlock ? " disabled" : ""}
+        >
+          ${isPlayingThisBlock
+            ? `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" /></svg>`
+            : `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M7 4l14 8-14 8V4z" fill="currentColor" /></svg>`}
+        </button>
+      </div>
     </div>
   `;
 }
@@ -460,19 +537,19 @@ function canvasPane(state: ProjectState): string {
             class="icon-button icon-button--lg play-icon"
             type="button"
             data-play-take
-            aria-label="Play take"
-            title="Play take"
-            ${!state.take || state.is_playing ? "disabled" : ""}
+            aria-label="${takePlaybackActive ? "Stop" : "Play take"}"
+            title="${takePlaybackActive ? "Stop" : "Play take"}"
+            ${!state.take || (state.is_playing && !takePlaybackActive) ? "disabled" : ""}
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7 4l14 8-14 8V4z" fill="currentColor" /></svg>
+            ${takePlaybackActive
+              ? `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" /></svg>`
+              : `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7 4l14 8-14 8V4z" fill="currentColor" /></svg>`}
           </button>
         </div>
       </div>
 
       ${isRecording
-        ? liveNotes.length
-          ? liveTakeGrid(liveNotes)
-          : emptyTakeGrid("Listening for notes\u2026", true)
+        ? liveTakeGrid(liveNotes, state.bpm)
         : state.take
           ? takeGrid(state)
           : emptyTakeGrid("Press Record to capture a take")}
@@ -612,6 +689,10 @@ function statusBar(state: ProjectState): string {
 
 function render(root: HTMLElement, state: ProjectState): void {
   currentState = state;
+  if (!state.is_playing) {
+    playingBlockIndex = null;
+    takePlaybackActive = false;
+  }
   root.innerHTML = /* html */ `
     <div class="app-shell">
       ${topbar(state)}
@@ -660,6 +741,11 @@ function render(root: HTMLElement, state: ProjectState): void {
     input?.focus();
     input?.select();
   }
+  // Auto-scroll during recording is driven solely by `runLivePlayhead`, in
+  // step with the playhead line's own position — not from here on every
+  // note event, which used to snap the scroll straight to the take editor's
+  // full width (however far a newly-landed note had just extended it) and
+  // read as a sudden lurch rather than the steady pace the playhead keeps.
 }
 
 function clampBpm(bpm: number): number {
@@ -730,7 +816,14 @@ async function startRecording(root: HTMLElement): Promise<void> {
     await stoppingRecording;
     const applied = await applyCommand({ type: "startRecording" });
     liveNotes = [];
+    // Mirrors `recording.rs`'s `begin_session`: the anchor (pulse zero)
+    // opens immediately, or after one bar's count-in when that's enabled.
+    const countInPulses = applied.state.count_in_enabled
+      ? applied.state.time_signature[0] * PULSES_PER_BEAT
+      : 0;
+    liveRecordingAnchorMs = Date.now() + pulseElapsedMs(countInPulses, applied.state.bpm);
     render(root, applied.state);
+    runLivePlayhead(root);
   } finally {
     startingRecording = false;
   }
@@ -739,6 +832,7 @@ async function startRecording(root: HTMLElement): Promise<void> {
 async function endRecording(root: HTMLElement): Promise<void> {
   if (stoppingRecording) return;
   liveNotes = [];
+  liveRecordingAnchorMs = null;
   const pendingStop = stopRecording();
   stoppingRecording = pendingStop;
 
@@ -752,6 +846,32 @@ async function endRecording(root: HTMLElement): Promise<void> {
   } finally {
     if (stoppingRecording === pendingStop) stoppingRecording = null;
   }
+}
+
+/** Moves the live take editor's playhead (issue: recording should show the
+ * passage of time, not just notes appearing) at a steady rate derived from
+ * `liveRecordingAnchorMs` and the project's bpm — a `requestAnimationFrame`
+ * loop rather than a fixed-duration CSS animation (contrast
+ * `timelinePlayhead`) because a recording's end time isn't known in advance.
+ * Self-terminates once recording stops or a newer take starts. */
+function runLivePlayhead(root: HTMLElement): void {
+  if (livePlayheadFrame !== null) return;
+  const tick = (): void => {
+    livePlayheadFrame = null;
+    if (!currentState?.is_recording || liveRecordingAnchorMs === null) return;
+    const elapsedMs = Date.now() - liveRecordingAnchorMs;
+    if (elapsedMs >= 0) {
+      const line = root.querySelector<HTMLElement>("[data-live-playhead]");
+      if (line) {
+        const pulses = elapsedMs / pulseElapsedMs(1, currentState.bpm);
+        line.style.transform = `translateX(${pulses * 32}px)`;
+        const editor = line.parentElement;
+        if (editor) editor.scrollLeft = Math.max(editor.scrollLeft, pulses * 32 - editor.clientWidth + 40);
+      }
+    }
+    livePlayheadFrame = requestAnimationFrame(tick);
+  };
+  livePlayheadFrame = requestAnimationFrame(tick);
 }
 
 /**
@@ -848,6 +968,7 @@ function wireLiveNoteFeed(root: HTMLElement): void {
 
 async function playTake(root: HTMLElement): Promise<void> {
   const applied = await applyCommand({ type: "playTake" });
+  takePlaybackActive = applied.state.is_playing;
   render(root, applied.state);
   if (applied.state.is_playing && applied.state.take) {
     // Playback schedules the take's *resolved* view (trim + quantisation
@@ -878,6 +999,7 @@ async function addTakeToLibrary(root: HTMLElement): Promise<void> {
 async function playBlock(root: HTMLElement, index: number): Promise<void> {
   const block = currentState?.blocks[index];
   const applied = await applyCommand({ type: "playBlock", payload: index });
+  playingBlockIndex = applied.state.is_playing ? index : null;
   render(root, applied.state);
   if (applied.state.is_playing && block) {
     const length = block.notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
@@ -902,6 +1024,7 @@ async function playTimeline(root: HTMLElement): Promise<void> {
  * immediately rather than waiting for it to finish on its own. */
 async function stopCurrentPlayback(root: HTMLElement): Promise<void> {
   timelinePlaybackActive = false;
+  takePlaybackActive = false;
   const applied = await stopPlayback();
   render(root, applied.state);
 }
@@ -1556,13 +1679,24 @@ function wireRecordingControls(root: HTMLElement): void {
       toggleRecording(root);
     }
     if (target.closest("[data-play-take]")) {
-      void playTake(root);
+      if (currentState?.is_playing && takePlaybackActive) {
+        void stopCurrentPlayback(root);
+      } else {
+        void playTake(root);
+      }
     }
     if (target.closest("[data-add-to-library]")) {
       void addTakeToLibrary(root);
     }
     const blockButton = target.closest<HTMLButtonElement>("[data-play-block]");
-    if (blockButton) void playBlock(root, Number(blockButton.dataset.playBlock));
+    if (blockButton) {
+      const index = Number(blockButton.dataset.playBlock);
+      if (currentState?.is_playing && playingBlockIndex === index) {
+        void stopCurrentPlayback(root);
+      } else {
+        void playBlock(root, index);
+      }
+    }
     const colourPicker = target.closest<HTMLButtonElement>("[data-toggle-block-colour-picker]");
     if (colourPicker?.dataset.toggleBlockColourPicker) {
       const id = Number(colourPicker.dataset.toggleBlockColourPicker);

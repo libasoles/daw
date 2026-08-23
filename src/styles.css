@@ -401,7 +401,7 @@ body {
   align-items: center;
   gap: var(--space-1);
   border-radius: var(--radius);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2);
   background: var(--surface-raised);
   flex-wrap: wrap;
 }
@@ -490,7 +490,7 @@ body {
 
 .library-block__name {
   flex: 1;
-  min-width: 6rem;
+  min-width: 3rem;
   font-size: var(--text-xs);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -509,12 +509,12 @@ body {
   padding: 0 var(--space-1);
 }
 
-.library-block button {
+.library-block button:where(:not(.icon-button)) {
   font: inherit;
   font-size: 12px;
 }
 
-.library-block button {
+.library-block button:where(:not(.icon-button)) {
   padding: 4px 8px;
   border: 1px solid var(--line);
   border-radius: 5px;
@@ -522,8 +522,22 @@ body {
   color: var(--ink-dim);
 }
 
-.library-block button:hover {
+.library-block button:where(:not(.icon-button)):hover {
   color: var(--ink);
+}
+
+.library-block__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  margin-left: auto;
+}
+
+.library-block .icon-button {
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: none;
 }
 
 .library-block input[type="color"] {
@@ -751,6 +765,17 @@ body {
 
 .take-notes--live rect {
   fill: var(--rec);
+}
+
+.take-live-playhead {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2px;
+  height: 88px;
+  background: var(--rec);
+  pointer-events: none;
+  will-change: transform;
 }
 
 /* --- Inspector: sound, pulse and MIDI settings. ------------------------- */
