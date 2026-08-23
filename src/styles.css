@@ -300,26 +300,13 @@ body {
 }
 
 .unsaved-dialog button,
-.unsaved-dialog input,
-.inline-confirmation button {
+.unsaved-dialog input {
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-raised);
   color: var(--ink);
   font: inherit;
-}
-
-.inline-confirmation {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--rec);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--rec) 12%, transparent);
-  color: var(--ink-dim);
 }
 
 /* --- Tempo control (issue #3): proves the command seam end to end. ------ */

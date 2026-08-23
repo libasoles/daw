@@ -53,7 +53,6 @@ let projects: string[] = [];
 let activeProjectName: string | null = null;
 let isNamingProject = false;
 let renderedProjectState: ProjectState | null = null;
-let confirmRecordingOverwrite = false;
 let editingBlockId: number | null = null;
 let libraryCollapsed = false;
 let inspectorCollapsed = false;
@@ -231,8 +230,6 @@ function timelinePreview(state: ProjectState): string {
 function canvasPane(state: ProjectState): string {
   return /* html */ `
     <section class="canvas" aria-label="Recording and arrangement">
-      ${confirmRecordingOverwrite ? /* html */ `<div class="inline-confirmation" role="status">Recording will replace the current take. <button type="button" data-confirm-recording-overwrite>Replace</button><button type="button" data-cancel-recording-overwrite>Cancel</button></div>` : ""}
-
       ${timelinePreview(state)}
 
       <hr class="divider" />
@@ -456,29 +453,11 @@ async function setReverb(root: HTMLElement, reverb: number): Promise<void> {
   await applyCommand({ type: "setReverb", payload: value });
 }
 
-/**
- * Arms recording. If the recording area already holds a take, the core
- * reports `confirmOverwriteRecording` and leaves recording off; this asks
- * the user to confirm, then resends with `force: true` if they agree, per
- * the spec's "recording over a take that has not been added to the library
- * asks for confirmation first."
- */
+/** Arms recording. Replacing an existing take is not confirmed — the record
+ * button itself is the confirmation, per the user's call that recording
+ * over a take should just happen, not interrupt the player with a dialog. */
 async function startRecording(root: HTMLElement): Promise<void> {
-  const applied = await applyCommand({ type: "startRecording", payload: { force: false } });
-  const needsConfirmation = applied.effects.some(
-    (effect) => effect.type === "confirmOverwriteRecording",
-  );
-  if (needsConfirmation) {
-    confirmRecordingOverwrite = true;
-    render(root, applied.state);
-    return;
-  }
-  render(root, applied.state);
-}
-
-async function confirmRecordingOverwriteAction(root: HTMLElement): Promise<void> {
-  confirmRecordingOverwrite = false;
-  const applied = await applyCommand({ type: "startRecording", payload: { force: true } });
+  const applied = await applyCommand({ type: "startRecording" });
   render(root, applied.state);
 }
 
@@ -851,11 +830,6 @@ function wireRecordingControls(root: HTMLElement): void {
     const target = event.target as HTMLElement;
     if (target.closest("[data-record]")) {
       toggleRecording(root);
-    }
-    if (target.closest("[data-confirm-recording-overwrite]")) void confirmRecordingOverwriteAction(root);
-    if (target.closest("[data-cancel-recording-overwrite]")) {
-      confirmRecordingOverwrite = false;
-      if (renderedProjectState) render(root, renderedProjectState);
     }
     if (target.closest("[data-play-take]")) {
       void playTake(root);

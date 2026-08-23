@@ -43,8 +43,8 @@ fn commands_serialise_as_an_adjacently_tagged_object() {
         serde_json::json!({ "type": "setCountInEnabled", "payload": false })
     );
     assert_eq!(
-        serde_json::to_value(Command::StartRecording { force: false }).unwrap(),
-        serde_json::json!({ "type": "startRecording", "payload": { "force": false } })
+        serde_json::to_value(Command::StartRecording).unwrap(),
+        serde_json::json!({ "type": "startRecording" })
     );
     assert_eq!(
         serde_json::to_value(Command::SetTakeTrim(Trim {
@@ -167,9 +167,5 @@ fn effects_that_carry_a_take_serialise_the_take_inline() {
             "trim": { "start_pulse": 0, "end_pulse": 4 },
             "quantisation": "off"
         })
-    );
-    assert_eq!(
-        serde_json::to_value(Effect::ConfirmOverwriteRecording).unwrap(),
-        serde_json::json!({ "type": "confirmOverwriteRecording" })
     );
 }

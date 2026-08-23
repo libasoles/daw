@@ -82,7 +82,7 @@ fn apply_command(app: AppHandle, command: Command) -> Applied {
 /// to the audio engine, and carries out any effect the core asked for that
 /// the shell — not the webview — is responsible for.
 fn dispatch(app: &AppHandle, command: Command) -> Applied {
-    let starting_recording = matches!(command, Command::StartRecording { .. });
+    let starting_recording = matches!(command, Command::StartRecording);
 
     let applied = {
         let core = app.state::<Mutex<DawCore>>();
