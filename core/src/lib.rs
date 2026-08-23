@@ -490,7 +490,18 @@ pub enum Command {
     /// undo inverse, when there was no take to revert to. Undoable: reverts
     /// to whatever take (if any) was there before.
     StopRecording(Option<Take>),
+    /// Freezes the current take in the library and clears the recording area
+    /// so the next recording starts fresh. Undo restores both the removed
+    /// block and the take as one edit.
     AddTakeToLibrary,
+    /// The replayable forward half of [`Command::AddTakeToLibrary`]. This is
+    /// logged internally rather than sent by the shell.
+    AddBlockAndClearTake(Block),
+    /// The replayable inverse of [`Command::AddBlockAndClearTake`].
+    RemoveBlockAndRestoreTake {
+        block: Block,
+        take: Take,
+    },
     InsertBlock(Block),
     RemoveBlock(Block),
     PlayBlock(usize),
@@ -854,7 +865,7 @@ impl DawCore {
                 Vec::new()
             }
             Command::AddTakeToLibrary => {
-                if let Some(take) = self.state.take.as_ref() {
+                if let Some(take) = self.state.take.clone() {
                     let block = Block {
                         id: self.state.next_block_id,
                         name: format!("Take {}", self.state.next_block_id),
@@ -865,12 +876,23 @@ impl DawCore {
                         notes: take.notes(),
                     };
                     self.state.blocks.push(block.clone());
+                    self.state.take = None;
                     self.state.next_block_id += 1;
                     self.log(
-                        Command::InsertBlock(block.clone()),
-                        Command::RemoveBlock(block),
+                        Command::AddBlockAndClearTake(block.clone()),
+                        Command::RemoveBlockAndRestoreTake { block, take },
                     );
                 }
+                Vec::new()
+            }
+            Command::AddBlockAndClearTake(block) => {
+                self.state.blocks.push(block);
+                self.state.take = None;
+                Vec::new()
+            }
+            Command::RemoveBlockAndRestoreTake { block, take } => {
+                self.state.blocks.retain(|candidate| candidate != &block);
+                self.state.take = Some(take);
                 Vec::new()
             }
             Command::InsertBlock(block) => {
@@ -1295,6 +1317,14 @@ impl DawCore {
             Command::SetInstrument(instrument) => state.instrument = *instrument,
             Command::StopRecording(take) => state.take = take.clone(),
             Command::AddTakeToLibrary => {}
+            Command::AddBlockAndClearTake(block) => {
+                state.blocks.push(block.clone());
+                state.take = None;
+            }
+            Command::RemoveBlockAndRestoreTake { block, take } => {
+                state.blocks.retain(|candidate| candidate != block);
+                state.take = Some(take.clone());
+            }
             Command::InsertBlock(block) => state.blocks.push(block.clone()),
             Command::RemoveBlock(block) => {
                 state.blocks.retain(|candidate| candidate != block);

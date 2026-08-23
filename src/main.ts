@@ -534,10 +534,15 @@ function canvasPane(state: ProjectState): string {
         <div>
           <h2>Current take</h2>
           <span class="meta">${(() => {
-            const notes = state.is_recording ? liveNotes : state.take?.notes;
-            if (notes === undefined) return "no take yet";
             const pulsesPerBar = state.time_signature[0] * PULSES_PER_BEAT;
-            const length = notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
+            let length: number;
+            if (state.is_recording) {
+              length = liveNotes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
+            } else if (state.take) {
+              length = state.take.trim.end_pulse - state.take.trim.start_pulse;
+            } else {
+              return "no take yet";
+            }
             const bars = Math.ceil(length / pulsesPerBar);
             return `${bars} bar${bars === 1 ? "" : "s"}`;
           })()}</span>
@@ -1237,6 +1242,9 @@ function wireProjectControls(root: HTMLElement): void {
     const target = event.target as HTMLElement;
     if (target.closest("[data-project-menu-toggle]")) {
       projectMenuOpen = !projectMenuOpen;
+      if (currentState) render(root, currentState);
+    } else if (projectMenuOpen && !isNamingProject && !target.closest(".project-menu-wrap")) {
+      projectMenuOpen = false;
       if (currentState) render(root, currentState);
     }
     if (target.closest("[data-save-project]")) void saveCurrentProject(root);

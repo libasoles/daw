@@ -26,15 +26,20 @@ fn adding_a_take_to_the_library_freezes_its_current_view_and_is_undoable() {
     assert_eq!(added.state.blocks[0].color, "#f6cf4a");
     assert_eq!(added.state.blocks[0].notes[0].start_pulse, 2);
     assert_eq!(added.state.blocks[0].notes[0].end_pulse, 6);
+    assert!(added.state.take.is_none());
 
-    core.apply(Command::SetTakeTrim(Trim {
-        start_pulse: 0,
-        end_pulse: 8,
-    }));
-    assert_eq!(core.state().blocks[0].notes[0].start_pulse, 2);
-    core.apply(Command::Undo);
-    assert!(core.apply(Command::Undo).state.blocks.is_empty());
-    assert_eq!(core.apply(Command::Redo).state.blocks[0].name, "Take 1");
+    let undone = core.apply(Command::Undo);
+    assert!(undone.state.blocks.is_empty());
+    assert_eq!(
+        undone.state.take.unwrap().trim,
+        Trim {
+            start_pulse: 2,
+            end_pulse: 6,
+        }
+    );
+    let redone = core.apply(Command::Redo);
+    assert_eq!(redone.state.blocks[0].name, "Take 1");
+    assert!(redone.state.take.is_none());
 }
 
 #[test]
@@ -127,6 +132,14 @@ fn a_block_played_in_isolation_reports_its_own_schedule_and_is_mutually_exclusiv
     assert!(!core.state().is_playing);
 
     // Once playback is idle again, PlayBlock is refused while a take is playing.
+    core.apply(Command::StopRecording(Some(Take::from_raw_notes(vec![
+        RecordedNote {
+            pitch: 62,
+            velocity: 100,
+            start_pulse: 0,
+            end_pulse: 4,
+        },
+    ]))));
     core.apply(Command::PlayTake);
     let block_attempt = core.apply(Command::PlayBlock(0));
     assert_eq!(block_attempt.effects, Vec::<Effect>::new());
