@@ -75,6 +75,7 @@ const TIMELINE_ZOOM_MIN = 4;
 const TIMELINE_ZOOM_MAX = 28;
 const TIMELINE_ZOOM_SENSITIVITY = 0.02;
 let timelineZoomPxPerPulse = 12;
+let takeZoomPxPerPulse = 12;
 let projects: string[] = [];
 let activeProjectName: string | null = null;
 let isNamingProject = false;
@@ -171,19 +172,20 @@ function takeGrid(state: ProjectState): string {
   const take = state.take;
   if (!take) return "";
   const end = takeEndPulse(state);
-  const width = Math.max(end, 1) * 32;
   const lines = Array.from({ length: end + 1 }, (_, pulse) =>
-    `<line x1="${pulse * 32}" y1="0" x2="${pulse * 32}" y2="88" />`,
+    `<line x1="${pulse}" y1="0" x2="${pulse}" y2="88" vector-effect="non-scaling-stroke" />`,
   ).join("");
   // Draw the unedited capture so moving trim handles never makes a note
   // vanish from the editor. Only notes wholly beyond either trim edge are
   // softened; a note that reaches into the selected span remains legible.
   const notes = take.raw_notes.map((note) =>
-    `<rect class="take-note${note.end_pulse <= take.trim.start_pulse || note.start_pulse >= take.trim.end_pulse ? " take-note--softened" : ""}" data-note-start="${note.start_pulse}" data-note-end="${note.end_pulse}" x="${note.start_pulse * 32}" y="${72 - note.pitch % 5 * 12}" width="${Math.max(2, (note.end_pulse - note.start_pulse) * 32)}" height="9" rx="2" />`,
+    `<rect class="take-note${note.end_pulse <= take.trim.start_pulse || note.start_pulse >= take.trim.end_pulse ? " take-note--softened" : ""}" data-note-start="${note.start_pulse}" data-note-end="${note.end_pulse}" x="${note.start_pulse}" y="${72 - note.pitch % 5 * 12}" width="${Math.max(1, note.end_pulse - note.start_pulse)}" height="9" rx="2" />`,
   ).join("");
   const startPct = end > 0 ? (take.trim.start_pulse / end) * 100 : 0;
   const endPct = end > 0 ? (take.trim.end_pulse / end) * 100 : 0;
-  return `<div class="take-editor"><div class="take-editor__notes"><svg viewBox="0 0 ${width} 88" preserveAspectRatio="xMinYMid meet" aria-label="Take notes against the pulse grid"><g class="take-grid">${lines}</g><g class="take-notes">${notes}</g></svg>${takePlayhead(state)}</div><div class="take-trim-range" data-trim-range style="--trim-start: ${startPct}%; --trim-end: ${endPct}%;" aria-label="Trim range"><span class="take-trim-range__track" aria-hidden="true"></span><input class="take-trim-handle take-trim-handle--start" type="range" data-trim-start min="0" max="${end}" step="1" value="${take.trim.start_pulse}" aria-label="Trim start" /><input class="take-trim-handle take-trim-handle--end" type="range" data-trim-end min="0" max="${end}" step="1" value="${take.trim.end_pulse}" aria-label="Trim end" /></div></div>`;
+  // The trim range sits inside the same scrollable strip as the note grid,
+  // so its width follows the same per-pulse scale as the recorded notes.
+  return `<div class="take-editor" style="--take-px-per-pulse: ${takeZoomPxPerPulse}px; --take-pulses: ${end};"><div class="take-editor__notes" aria-label="Recorded notes. Pinch to zoom."><div class="take-editor__content"><svg viewBox="0 0 ${end} 88" preserveAspectRatio="none" aria-label="Take notes against the pulse grid"><g class="take-grid">${lines}</g><g class="take-notes">${notes}</g></svg>${takePlayhead(state)}<div class="take-trim-range" data-trim-range style="--trim-start: ${startPct}%; --trim-end: ${endPct}%;" aria-label="Trim range"><span class="take-trim-range__track" aria-hidden="true"></span><input class="take-trim-handle take-trim-handle--start" type="range" data-trim-start min="0" max="${end}" step="1" value="${take.trim.start_pulse}" aria-label="Trim start" /><input class="take-trim-handle take-trim-handle--end" type="range" data-trim-end min="0" max="${end}" step="1" value="${take.trim.end_pulse}" aria-label="Trim end" /></div></div></div></div>`;
 }
 
 /** Updates the trim range's local preview while a handle is being dragged.
@@ -293,23 +295,22 @@ function liveElapsedPulses(bpm: number): number {
 function liveTakeGrid(notes: RecordedNote[], bpm: number): string {
   const notesEnd = notes.reduce((max, note) => Math.max(max, note.end_pulse), 0);
   const end = Math.max(notesEnd, liveElapsedPulses(bpm));
-  const width = Math.max(end, 1) * 32;
   const lineCount = Math.ceil(end) + 1;
   const lines = Array.from({ length: lineCount }, (_, pulse) =>
-    `<line x1="${pulse * 32}" y1="0" x2="${pulse * 32}" y2="88" />`,
+    `<line x1="${pulse}" y1="0" x2="${pulse}" y2="88" vector-effect="non-scaling-stroke" />`,
   ).join("");
   const rects = notes.map((note) =>
-    `<rect x="${note.start_pulse * 32}" y="${72 - note.pitch % 5 * 12}" width="${Math.max(2, (note.end_pulse - note.start_pulse) * 32)}" height="9" rx="2" />`,
+    `<rect x="${note.start_pulse}" y="${72 - note.pitch % 5 * 12}" width="${Math.max(1, note.end_pulse - note.start_pulse)}" height="9" rx="2" />`,
   ).join("");
   const message = notes.length === 0
     ? `<span class="take-editor__empty-message">Listening for notes…</span>`
     : "";
-  return `<div class="take-editor take-editor--live" data-live-take-editor><div class="take-editor__notes"><svg viewBox="0 0 ${width} 88" preserveAspectRatio="xMinYMid meet" aria-label="Notes captured so far"><g class="take-grid">${lines}</g><g class="take-notes take-notes--live">${rects}</g></svg><div class="take-live-playhead" data-live-playhead aria-hidden="true"></div>${message}</div></div>`;
+  return `<div class="take-editor take-editor--live" data-live-take-editor style="--take-px-per-pulse: ${takeZoomPxPerPulse}px; --take-pulses: ${Math.max(end, 1)};"><div class="take-editor__notes" aria-label="Notes captured so far. Pinch to zoom."><div class="take-editor__content"><svg viewBox="0 0 ${Math.max(end, 1)} 88" preserveAspectRatio="none" aria-label="Notes captured so far"><g class="take-grid">${lines}</g><g class="take-notes take-notes--live">${rects}</g></svg><div class="take-live-playhead" data-live-playhead aria-hidden="true"></div>${message}</div></div></div>`;
 }
 
 /** Keeps the take editor's note strip in the layout before a take exists. */
 function emptyTakeGrid(message: string): string {
-  return `<div class="take-editor take-editor--empty"><div class="take-editor__notes"><svg viewBox="0 0 32 88" aria-label="${escapeHtml(message)}"><g class="take-grid"><line x1="0" y1="0" x2="0" y2="88" /><line x1="32" y1="0" x2="32" y2="88" /></g></svg><span class="take-editor__empty-message">${escapeHtml(message)}</span></div></div>`;
+  return `<div class="take-editor take-editor--empty" style="--take-px-per-pulse: ${takeZoomPxPerPulse}px; --take-pulses: 1;"><div class="take-editor__notes"><div class="take-editor__content"><svg viewBox="0 0 1 88" preserveAspectRatio="none" aria-label="${escapeHtml(message)}"><g class="take-grid"><line x1="0" y1="0" x2="0" y2="88" /><line x1="1" y1="0" x2="1" y2="88" /></g></svg><span class="take-editor__empty-message">${escapeHtml(message)}</span></div></div></div>`;
 }
 
 /** Shown once at boot, while the first `fetchProjectState()` is in flight.
@@ -336,9 +337,11 @@ function projectControlsPanel(): string {
           <button type="button" data-cancel-project-name>Cancel</button>
         </form>
       ` : ""}
-      <div class="project-controls__list">
-        <span>Projects</span>
-        ${projects.length ? projects.map((name) => `<button type="button" data-open-project="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("") : "<span class=\"project-controls__empty\">No saved projects yet</span>"}
+      <div class="project-controls__section">
+        <span class="project-controls__heading">Projects</span>
+        <div class="project-controls__list">
+          ${projects.length ? projects.map((name) => `<button type="button" class="project-controls__item" data-open-project="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("") : "<span class=\"project-controls__empty\">No saved projects yet</span>"}
+        </div>
       </div>
     </section>
   `;
@@ -531,9 +534,12 @@ function canvasPane(state: ProjectState): string {
         <div>
           <h2>Current take</h2>
           <span class="meta">${(() => {
-            const count = state.is_recording ? liveNotes.length : state.take?.notes.length;
-            if (count === undefined) return "no take yet";
-            return `${count} note${count === 1 ? "" : "s"}`;
+            const notes = state.is_recording ? liveNotes : state.take?.notes;
+            if (notes === undefined) return "no take yet";
+            const pulsesPerBar = state.time_signature[0] * PULSES_PER_BEAT;
+            const length = notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
+            const bars = Math.ceil(length / pulsesPerBar);
+            return `${bars} bar${bars === 1 ? "" : "s"}`;
           })()}</span>
         </div>
         <div class="canvas-actions">
@@ -780,7 +786,7 @@ function syncLiveTakeScroll(root: HTMLElement, state: ProjectState): void {
   const editor = root.querySelector<HTMLElement>("[data-live-take-editor] .take-editor__notes");
   if (!editor) return;
   const pulses = liveElapsedPulses(state.bpm);
-  editor.scrollLeft = Math.max(editor.scrollLeft, pulses * 32 - editor.clientWidth + 40);
+  editor.scrollLeft = Math.max(editor.scrollLeft, pulses * takeZoomPxPerPulse - editor.clientWidth + 40);
 }
 
 function clampBpm(bpm: number): number {
@@ -899,7 +905,7 @@ function runLivePlayhead(root: HTMLElement): void {
       const line = root.querySelector<HTMLElement>("[data-live-playhead]");
       if (line) {
         const pulses = elapsedMs / pulseElapsedMs(1, currentState.bpm);
-        line.style.transform = `translateX(${pulses * 32}px)`;
+        line.style.transform = `translateX(${pulses * takeZoomPxPerPulse}px)`;
         syncLiveTakeScroll(root, currentState);
       }
     }
@@ -924,9 +930,9 @@ function runTakePlayhead(root: HTMLElement): void {
       const line = root.querySelector<HTMLElement>("[data-take-playhead]");
       if (line) {
         const pulses = elapsedMs / pulseElapsedMs(1, currentState.bpm);
-        line.style.transform = `translateX(${pulses * 32}px)`;
+        line.style.transform = `translateX(${pulses * takeZoomPxPerPulse}px)`;
         const editor = line.parentElement;
-        if (editor) editor.scrollLeft = Math.max(editor.scrollLeft, pulses * 32 - editor.clientWidth + 40);
+        if (editor) editor.scrollLeft = Math.max(editor.scrollLeft, pulses * takeZoomPxPerPulse - editor.clientWidth + 40);
       }
     }
     takePlayheadFrame = requestAnimationFrame(tick);
@@ -1333,6 +1339,26 @@ function wireTimelineControls(root: HTMLElement): void {
 
   root.addEventListener("wheel", (event) => {
     if (!event.ctrlKey) return;
+    const takeNotes = (event.target as HTMLElement).closest<HTMLElement>(".take-editor__notes");
+    if (takeNotes) {
+      const editor = takeNotes.closest<HTMLElement>(".take-editor");
+      if (!editor) return;
+      event.preventDefault();
+      const nextZoom = Math.min(
+        TIMELINE_ZOOM_MAX,
+        Math.max(TIMELINE_ZOOM_MIN, takeZoomPxPerPulse * Math.exp(-event.deltaY * TIMELINE_ZOOM_SENSITIVITY)),
+      );
+      if (nextZoom === takeZoomPxPerPulse) return;
+
+      const rect = takeNotes.getBoundingClientRect();
+      const pointerOffset = event.clientX - rect.left;
+      const pulseAtPointer = (takeNotes.scrollLeft + pointerOffset) / takeZoomPxPerPulse;
+      takeZoomPxPerPulse = nextZoom;
+      editor.style.setProperty("--take-px-per-pulse", `${nextZoom}px`);
+      takeNotes.scrollLeft = Math.max(0, pulseAtPointer * nextZoom - pointerOffset);
+      return;
+    }
+
     const scroll = (event.target as HTMLElement).closest<HTMLElement>(".timeline__scroll");
     if (!scroll || !currentState) return;
 

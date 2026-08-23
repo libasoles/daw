@@ -263,15 +263,57 @@ body {
   text-align: left;
 }
 
-.project-controls__name,
-.project-controls__list {
+.project-controls__name {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-1);
 }
 
-.project-controls button:not(.icon-button),
+.project-controls__name button {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-base);
+  color: var(--ink);
+  font: inherit;
+}
+
+.project-controls__section {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.project-controls__heading {
+  padding: 0 var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.project-controls__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.project-controls__item {
+  display: block;
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+}
+
+.project-controls__item:hover {
+  background: var(--surface-base);
+}
+
 .project-controls input {
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--line);
@@ -286,6 +328,7 @@ body {
 }
 
 .project-controls__empty {
+  padding: var(--space-1) var(--space-2);
   color: var(--ink-dim);
   font-size: var(--text-xs);
 }
@@ -689,10 +732,15 @@ body {
   overflow-x: auto;
 }
 
-.take-editor__notes svg {
-  display: block;
-  width: auto;
+.take-editor__content {
+  position: relative;
+  width: calc(var(--take-pulses) * var(--take-px-per-pulse));
   min-width: 100%;
+}
+
+.take-editor__content svg {
+  display: block;
+  width: 100%;
   height: 88px;
 }
 
@@ -716,6 +764,8 @@ body {
 
 .take-trim-range {
   position: relative;
+  box-sizing: border-box;
+  width: 100%;
   height: 24px;
   padding: 0 var(--space-2);
   background: var(--surface-raised);
