@@ -248,7 +248,6 @@ function canvasPane(state: ProjectState): string {
             <select data-quantisation aria-label="Quantisation">
               ${(["off", "whole", "half", "quarter", "eighth"] as Quantisation[]).map((value) => `<option value="${value}"${state.take?.quantisation === value ? " selected" : ""}>${value}</option>`).join("")}
             </select>
-            <button type="button" data-apply-quantisation>Apply</button>
             <button type="button" data-add-to-library>Add to library</button>
           </div>
         ` : ""}
@@ -391,12 +390,14 @@ function render(root: HTMLElement, state: ProjectState): void {
       ${statusBar(state)}
     </div>
     ${pendingProjectAction ? /* html */ `
-      <div class="unsaved-dialog" role="dialog" aria-modal="true" aria-label="Unsaved changes">
-        <p>Save changes before continuing?</p>
-        ${pendingSaveNeedsName ? `<label>Project name <input data-pending-project-name required autocomplete="off" /></label>` : ""}
-        <button type="button" data-save-pending>Save and continue</button>
-        <button type="button" data-discard-pending>Discard changes</button>
-        <button type="button" data-cancel-pending>Cancel</button>
+      <div class="unsaved-dialog">
+        <div class="unsaved-dialog__panel" role="dialog" aria-modal="true" aria-label="Unsaved changes">
+          <p>Save changes before continuing?</p>
+          ${pendingSaveNeedsName ? `<label>Project name <input data-pending-project-name required autocomplete="off" /></label>` : ""}
+          <button type="button" data-save-pending>Save and continue</button>
+          <button type="button" data-discard-pending>Discard changes</button>
+          <button type="button" data-cancel-pending>Cancel</button>
+        </div>
       </div>
     ` : ""}
   `;
@@ -860,9 +861,6 @@ function wireRecordingControls(root: HTMLElement): void {
     if (target.closest("[data-play-take]")) {
       void playTake(root);
     }
-    if (target.closest("[data-apply-quantisation]")) {
-      void applyTakeQuantisation(root);
-    }
     if (target.closest("[data-add-to-library]")) {
       void addTakeToLibrary(root);
     }
@@ -902,6 +900,12 @@ function wireRecordingControls(root: HTMLElement): void {
     const start = root.querySelector<HTMLInputElement>("[data-trim-start]");
     const end = root.querySelector<HTMLInputElement>("[data-trim-end]");
     if (start && end) void setTakeTrim(root, Number(start.value), Number(end.value));
+  });
+
+  root.addEventListener("change", (event) => {
+    const select = event.target as HTMLSelectElement;
+    if (!select.matches("[data-quantisation]")) return;
+    void applyTakeQuantisation(root);
   });
 
   window.addEventListener("keydown", (event) => {

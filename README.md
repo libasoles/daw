@@ -9,9 +9,8 @@ full specification and [`CONTEXT.md`](CONTEXT.md) for the vocabulary.
 
 ## Status
 
-Milestone **H1**, in progress. The shell opens a window and now makes sound: a
-"Play test note" button sounds a piano note through a bundled SoundFont. No
-MIDI input yet, and no way to play more than one fixed debug note.
+Milestone **H1**, in progress. The shell opens a window and is ready for audio
+output through a bundled SoundFont.
 
 ## Requirements
 
@@ -92,8 +91,7 @@ the full design, and `CONTEXT.md`'s "synth thread" entry for the vocabulary.
 
 This is not exercised by `cargo test` — there is no sound hardware in CI to
 confirm against, and the spec is explicit that `rustysynth` and `cpal` are
-"exercised by hand" behind their ports. Confirming that a note actually sounds
-means running `npm run dev` (or the built app) and pressing "Play test note."
+"exercised by hand" behind their ports.
 
 ## Typography and the dark palette
 

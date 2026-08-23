@@ -289,14 +289,28 @@ body {
   left: 0;
   z-index: 10;
   display: grid;
-  place-content: center;
-  gap: var(--space-2);
+  place-items: center;
   padding: var(--space-4);
-  background: color-mix(in srgb, var(--surface-base) 82%, transparent);
+  background: rgb(13 15 18 / 82%);
 }
 
-.unsaved-dialog > * {
+.unsaved-dialog__panel {
+  display: grid;
+  gap: var(--space-2);
+  width: min(100%, 34rem);
+  padding: var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) * 2);
+  background: var(--surface-raised);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 55%);
+}
+
+.unsaved-dialog__panel > * {
   margin: 0;
+}
+
+.unsaved-dialog__panel p {
+  font-size: var(--text-md);
 }
 
 .unsaved-dialog button,
@@ -573,6 +587,7 @@ body {
 }
 
 .timeline__track {
+  position: relative;
   display: flex;
   gap: 3px;
   height: 44px;
@@ -580,9 +595,19 @@ body {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-base);
+  overflow: hidden;
+}
+
+.timeline__track--empty {
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+  font-size: var(--text-xs);
 }
 
 .timeline__clip {
+  position: relative;
+  z-index: 1;
   flex: 1;
   border-radius: 4px;
   background: var(--block-color);
@@ -599,15 +624,22 @@ body {
   text-overflow: ellipsis;
 }
 
-.timeline__empty {
-  height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px dashed var(--line);
-  border-radius: var(--radius);
-  color: var(--ink-faint);
-  font-size: var(--text-xs);
+.timeline__playhead {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 72%, transparent);
+  pointer-events: none;
+  animation: timeline-playhead var(--playback-duration) linear var(--playback-delay) both;
+}
+
+@keyframes timeline-playhead {
+  from { left: 0; }
+  to { left: calc(100% - 2px); }
 }
 
 .canvas-head {
@@ -880,21 +912,6 @@ body {
   margin: 0;
   color: var(--ink-faint);
   font-size: 13px;
-}
-
-.test-note {
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-raised);
-  color: var(--ink-dim);
-  font-size: var(--text-xs);
-  cursor: default;
-}
-
-.test-note:hover {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 /* --- Status bar. --------------------------------------------------------- */
