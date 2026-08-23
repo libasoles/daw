@@ -294,8 +294,7 @@ function topbar(state: ProjectState): string {
         <label class="pulse-toggle pulse-toggle--icon pulse-toggle--transport count-in-toggle" title="One-bar count-in">
           <input type="checkbox" data-count-in aria-label="One-bar count-in"${state.count_in_enabled ? " checked" : ""} />
           <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7" />
-            <text x="12" y="15.5" text-anchor="middle" fill="currentColor" font-family="system-ui, sans-serif" font-size="10" font-weight="700">123</text>
+            <text x="12" y="17" text-anchor="middle" fill="currentColor" font-family="system-ui, sans-serif" font-size="16" font-weight="700">123</text>
           </svg>
         </label>
         <label class="pulse-toggle pulse-toggle--icon pulse-toggle--transport metronome-toggle" title="Metronome">
@@ -303,7 +302,6 @@ function topbar(state: ProjectState): string {
           <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M7.5 19h9L14.4 6H9.6L7.5 19zm4.5-9v5m-2 4h4M11 3h2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </label>
         <div class="tempo" role="group" aria-label="Tempo">
-          <button class="tempo__step" type="button" data-tempo-step="-1" aria-label="Decrease tempo">&minus;</button>
           <label class="tempo__readout">
             <input
               class="tempo__input"
@@ -317,7 +315,6 @@ function topbar(state: ProjectState): string {
             />
             <span class="tempo__unit">bpm</span>
           </label>
-          <button class="tempo__step" type="button" data-tempo-step="1" aria-label="Increase tempo">+</button>
         </div>
       </div>
     </header>
@@ -1342,17 +1339,6 @@ function wireTimelineSelection(root: HTMLElement): void {
 }
 
 function wireTempoControls(root: HTMLElement): void {
-  root.addEventListener("click", (event) => {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
-      "[data-tempo-step]",
-    );
-    if (!button) return;
-    const input = root.querySelector<HTMLInputElement>(".tempo__input");
-    const current = input ? Number(input.value) : 0;
-    const step = Number(button.dataset.tempoStep);
-    void setBpm(root, current + step);
-  });
-
   root.addEventListener("change", (event) => {
     const input = event.target as HTMLElement;
     if (!input.matches(".tempo__input")) return;
