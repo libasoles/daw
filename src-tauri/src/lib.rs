@@ -327,6 +327,29 @@ fn play_test_note(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether the audio engine is available, checked once at boot so the
+/// webview can report a missing output device up front instead of only
+/// after the user clicks "Play test note".
+#[derive(serde::Serialize)]
+struct AudioStatus {
+    available: bool,
+    message: String,
+}
+
+#[tauri::command]
+fn audio_status(app: AppHandle) -> AudioStatus {
+    let engine = app.state::<AudioEngineHandle>();
+    let engine = engine.0.lock().expect("audio engine mutex poisoned");
+    if engine.is_some() {
+        AudioStatus { available: true, message: "audio ready".to_string() }
+    } else {
+        AudioStatus {
+            available: false,
+            message: "no audio output device is available".to_string(),
+        }
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -387,6 +410,7 @@ pub fn run() {
             open_project,
             finish_close,
             play_test_note,
+            audio_status,
             stop_recording,
             list_midi_devices,
             select_midi_device

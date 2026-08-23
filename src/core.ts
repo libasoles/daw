@@ -137,6 +137,18 @@ export function playTestNote(): Promise<void> {
   return invoke<void>("play_test_note");
 }
 
+export interface AudioStatus {
+  available: boolean;
+  message: string;
+}
+
+/** Checked once at boot so a missing/unavailable audio output device is
+ * reported up front, rather than only after the user clicks "Play test
+ * note" and reads the small status line. */
+export function fetchAudioStatus(): Promise<AudioStatus> {
+  return invoke<AudioStatus>("audio_status");
+}
+
 export interface MidiDevice {
   id: string;
   name: string;
