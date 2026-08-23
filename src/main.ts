@@ -69,24 +69,19 @@ const PULSES_PER_BEAT = 2;
  */
 const TIMELINE_BARS = 64;
 
-type TimelineZoom = "overview" | "normal" | "close";
-/** Three fixed zoom levels (#16): pixels of horizontal space per pulse.
- * This is a view setting only — never sent to the core, never part of
- * `ProjectState` — so it lives in this module-level variable, not a
- * command payload. */
-const TIMELINE_ZOOM_PX_PER_PULSE: Record<TimelineZoom, number> = {
-  overview: 4,
-  normal: 12,
-  close: 28,
-};
-let timelineZoom: TimelineZoom = "normal";
+/** The timeline's horizontal scale, in pixels per pulse. It is a view
+ * setting only — never sent to the core or stored in `ProjectState`. */
+const TIMELINE_ZOOM_MIN = 4;
+const TIMELINE_ZOOM_MAX = 28;
+const TIMELINE_ZOOM_SENSITIVITY = 0.02;
+let timelineZoomPxPerPulse = 12;
 let projects: string[] = [];
 let activeProjectName: string | null = null;
 let isNamingProject = false;
 let currentState: ProjectState | null = null;
 let editingBlockId: number | null = null;
 /** The placement selected on the timeline (issue #21), if any — a view
- * concern only, like `timelineZoom`, never part of `ProjectState`. `Delete`
+ * concern only, like `timelineZoomPxPerPulse`, never part of `ProjectState`. `Delete`
  * acts on whichever placement this names. */
 let selectedPlacementId: number | null = null;
 let libraryCollapsed = false;
@@ -180,12 +175,32 @@ function takeGrid(state: ProjectState): string {
   const lines = Array.from({ length: end + 1 }, (_, pulse) =>
     `<line x1="${pulse * 32}" y1="0" x2="${pulse * 32}" y2="88" />`,
   ).join("");
-  const notes = take.notes.map((note) =>
-    `<rect x="${note.start_pulse * 32}" y="${72 - note.pitch % 5 * 12}" width="${Math.max(2, (note.end_pulse - note.start_pulse) * 32)}" height="9" rx="2" />`,
+  // Draw the unedited capture so moving trim handles never makes a note
+  // vanish from the editor. Only notes wholly beyond either trim edge are
+  // softened; a note that reaches into the selected span remains legible.
+  const notes = take.raw_notes.map((note) =>
+    `<rect class="take-note${note.end_pulse <= take.trim.start_pulse || note.start_pulse >= take.trim.end_pulse ? " take-note--softened" : ""}" data-note-start="${note.start_pulse}" data-note-end="${note.end_pulse}" x="${note.start_pulse * 32}" y="${72 - note.pitch % 5 * 12}" width="${Math.max(2, (note.end_pulse - note.start_pulse) * 32)}" height="9" rx="2" />`,
   ).join("");
   const startPct = end > 0 ? (take.trim.start_pulse / end) * 100 : 0;
   const endPct = end > 0 ? (take.trim.end_pulse / end) * 100 : 0;
-  return `<div class="take-editor"><svg viewBox="0 0 ${width} 88" preserveAspectRatio="xMinYMid meet" aria-label="Take notes against the pulse grid"><g class="take-grid">${lines}</g><g class="take-notes">${notes}</g></svg>${takePlayhead(state)}<div class="take-trim-handles" aria-label="Trim handles"><input class="take-trim-handle take-trim-handle--start" type="range" data-trim-start min="0" max="${end}" step="1" value="${take.trim.start_pulse}" style="--pct: ${startPct}%" aria-label="Trim start" /><input class="take-trim-handle take-trim-handle--end" type="range" data-trim-end min="0" max="${end}" step="1" value="${take.trim.end_pulse}" style="--pct: ${endPct}%" aria-label="Trim end" /></div></div>`;
+  return `<div class="take-editor"><div class="take-editor__notes"><svg viewBox="0 0 ${width} 88" preserveAspectRatio="xMinYMid meet" aria-label="Take notes against the pulse grid"><g class="take-grid">${lines}</g><g class="take-notes">${notes}</g></svg>${takePlayhead(state)}</div><div class="take-trim-range" data-trim-range style="--trim-start: ${startPct}%; --trim-end: ${endPct}%;" aria-label="Trim range"><span class="take-trim-range__track" aria-hidden="true"></span><input class="take-trim-handle take-trim-handle--start" type="range" data-trim-start min="0" max="${end}" step="1" value="${take.trim.start_pulse}" aria-label="Trim start" /><input class="take-trim-handle take-trim-handle--end" type="range" data-trim-end min="0" max="${end}" step="1" value="${take.trim.end_pulse}" aria-label="Trim end" /></div></div>`;
+}
+
+/** Updates the trim range's local preview while a handle is being dragged.
+ * The command remains a `change` gesture, so the core remains the owner of
+ * the persisted trim and of its audible resolved notes. */
+function previewTakeTrim(root: HTMLElement, start: number, end: number): void {
+  const range = root.querySelector<HTMLElement>("[data-trim-range]");
+  const maximum = Number(root.querySelector<HTMLInputElement>("[data-trim-start]")?.max ?? 0);
+  if (range && maximum > 0) {
+    range.style.setProperty("--trim-start", `${(start / maximum) * 100}%`);
+    range.style.setProperty("--trim-end", `${(end / maximum) * 100}%`);
+  }
+  root.querySelectorAll<SVGRectElement>(".take-note[data-note-start][data-note-end]").forEach((note) => {
+    const noteStart = Number(note.dataset.noteStart);
+    const noteEnd = Number(note.dataset.noteEnd);
+    note.classList.toggle("take-note--softened", noteEnd <= start || noteStart >= end);
+  });
 }
 
 /**
@@ -200,13 +215,11 @@ function takeGrid(state: ProjectState): string {
 function timelineGrid(state: ProjectState): string {
   const pulsesPerBar = state.time_signature[0] * PULSES_PER_BEAT;
   const totalPulses = TIMELINE_BARS * pulsesPerBar;
-  const pxPerPulse = TIMELINE_ZOOM_PX_PER_PULSE[timelineZoom];
-  const width = totalPulses * pxPerPulse;
   const lines = Array.from({ length: totalPulses + 1 }, (_, pulse) => {
     const accent = pulse % pulsesPerBar === 0;
-    return `<line class="timeline-grid__line${accent ? " timeline-grid__line--accent" : ""}" x1="${pulse * pxPerPulse}" y1="0" x2="${pulse * pxPerPulse}" y2="120" />`;
+    return `<line class="timeline-grid__line${accent ? " timeline-grid__line--accent" : ""}" x1="${pulse}" y1="0" x2="${pulse}" y2="120" vector-effect="non-scaling-stroke" />`;
   }).join("");
-  return `<svg class="timeline-grid" width="${width}" height="120" viewBox="0 0 ${width} 120" aria-label="Timeline pulse grid">${lines}</svg>`;
+  return `<svg class="timeline-grid" height="120" viewBox="0 0 ${totalPulses} 120" preserveAspectRatio="none" aria-label="Timeline pulse grid" style="width: calc(${totalPulses} * var(--timeline-px-per-pulse));">${lines}</svg>`;
 }
 
 /**
@@ -217,15 +230,12 @@ function timelineGrid(state: ProjectState): string {
  * deleted block (#23) would leave it.
  */
 function timelinePlacements(state: ProjectState): string {
-  const pxPerPulse = TIMELINE_ZOOM_PX_PER_PULSE[timelineZoom];
   return state.placements
     .filter((placement) => placement.track === 0)
     .map((placement) => {
       const length = placement.notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
-      const left = placement.start_pulse * pxPerPulse;
-      const width = Math.max(length * pxPerPulse, 2);
       const selected = placement.id === selectedPlacementId;
-      return `<div class="timeline-placement${selected ? " timeline-placement--selected" : ""}" style="--placement-color: ${placement.color}; left: ${left}px; width: ${width}px;" data-placement="${placement.id}" draggable="true" data-drag-placement="${placement.id}" aria-selected="${selected}">${escapeHtml(placement.name)}</div>`;
+      return `<div class="timeline-placement${selected ? " timeline-placement--selected" : ""}" style="--placement-color: ${placement.color}; --placement-start: ${placement.start_pulse}; --placement-length: ${length};" data-placement="${placement.id}" draggable="true" data-drag-placement="${placement.id}" aria-selected="${selected}">${escapeHtml(placement.name)}</div>`;
     })
     .join("");
 }
@@ -254,13 +264,12 @@ function pulseElapsedMs(pulses: number, bpm: number): number {
  */
 function timelinePlayhead(state: ProjectState): string {
   if (!state.is_playing || !timelinePlaybackActive) return "";
-  const pxPerPulse = TIMELINE_ZOOM_PX_PER_PULSE[timelineZoom];
-  const distance = timelineTotalPulses(state) * pxPerPulse;
+  const distance = timelineTotalPulses(state);
   const durationMs = pulseElapsedMs(timelineTotalPulses(state), state.bpm);
   // Looping (issue #19) repeats the same sweep indefinitely rather than
   // holding at the end of one pass.
   const iterationCount = state.loop_enabled ? "infinite" : "1";
-  return `<div class="timeline-playhead" style="--playhead-distance: ${distance}px; animation-duration: ${durationMs}ms; animation-iteration-count: ${iterationCount};" aria-hidden="true"></div>`;
+  return `<div class="timeline-playhead" style="--playhead-distance: ${distance}; animation-duration: ${durationMs}ms; animation-iteration-count: ${iterationCount};" aria-hidden="true"></div>`;
 }
 
 /** How many pulses have elapsed since `liveRecordingAnchorMs` — the live
@@ -295,12 +304,12 @@ function liveTakeGrid(notes: RecordedNote[], bpm: number): string {
   const message = notes.length === 0
     ? `<span class="take-editor__empty-message">Listening for notes…</span>`
     : "";
-  return `<div class="take-editor take-editor--live" data-live-take-editor><svg viewBox="0 0 ${width} 88" preserveAspectRatio="xMinYMid meet" aria-label="Notes captured so far"><g class="take-grid">${lines}</g><g class="take-notes take-notes--live">${rects}</g></svg><div class="take-live-playhead" data-live-playhead aria-hidden="true"></div>${message}</div>`;
+  return `<div class="take-editor take-editor--live" data-live-take-editor><div class="take-editor__notes"><svg viewBox="0 0 ${width} 88" preserveAspectRatio="xMinYMid meet" aria-label="Notes captured so far"><g class="take-grid">${lines}</g><g class="take-notes take-notes--live">${rects}</g></svg><div class="take-live-playhead" data-live-playhead aria-hidden="true"></div>${message}</div></div>`;
 }
 
 /** Keeps the take editor's note strip in the layout before a take exists. */
 function emptyTakeGrid(message: string): string {
-  return `<div class="take-editor take-editor--empty"><svg viewBox="0 0 32 88" aria-label="${escapeHtml(message)}"><g class="take-grid"><line x1="0" y1="0" x2="0" y2="88" /><line x1="32" y1="0" x2="32" y2="88" /></g></svg><span class="take-editor__empty-message">${escapeHtml(message)}</span></div>`;
+  return `<div class="take-editor take-editor--empty"><div class="take-editor__notes"><svg viewBox="0 0 32 88" aria-label="${escapeHtml(message)}"><g class="take-grid"><line x1="0" y1="0" x2="0" y2="88" /><line x1="32" y1="0" x2="32" y2="88" /></g></svg><span class="take-editor__empty-message">${escapeHtml(message)}</span></div></div>`;
 }
 
 /** Shown once at boot, while the first `fetchProjectState()` is in flight.
@@ -355,6 +364,9 @@ function topbar(state: ProjectState): string {
         </button>
         <button class="icon-button" type="button" data-save-project aria-label="Save project" title="Save project" ${state.is_dirty ? "" : "disabled"}>
           <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M5 4h12l3 3v13H5V4zm3 0v6h8V4m-7 16v-6h6v6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" /></svg>
+        </button>
+        <button class="icon-button" type="button" data-export-midi aria-label="Export MIDI file" title="Export MIDI file">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 4v10m0 0 4-4m-4 4-4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </button>
       </div>
       <div class="topbar-spacer" data-tauri-drag-region></div>
@@ -470,27 +482,27 @@ function timelinePane(state: ProjectState): string {
     <section class="timeline" aria-label="Timeline">
       <div class="timeline__header">
         <h2>Timeline</h2>
-        <button
-          class="timeline__play"
-          type="button"
-          data-play-timeline
-          ${
-            (state.is_playing && !timelinePlaybackActive) ||
-            (!state.is_playing && state.placements.length === 0)
-              ? "disabled"
-              : ""
-          }
-        >
-          ${state.is_playing && timelinePlaybackActive ? "Stop (Space)" : "Play timeline (Space)"}
-        </button>
-        <button class="timeline__export" type="button" data-export-midi>Export .mid</button>
-        <div class="timeline__zoom" role="group" aria-label="Timeline zoom">
-          <button type="button" data-timeline-zoom="overview" aria-pressed="${timelineZoom === "overview"}">Overview</button>
-          <button type="button" data-timeline-zoom="normal" aria-pressed="${timelineZoom === "normal"}">Normal</button>
-          <button type="button" data-timeline-zoom="close" aria-pressed="${timelineZoom === "close"}">Close</button>
+        <div class="timeline__actions">
+          <button
+            class="icon-button icon-button--lg play-icon"
+            type="button"
+            data-play-timeline
+            aria-label="${state.is_playing && timelinePlaybackActive ? "Stop" : "Play timeline"}"
+            title="${state.is_playing && timelinePlaybackActive ? "Stop" : "Play timeline"}"
+            ${
+              (state.is_playing && !timelinePlaybackActive) ||
+              (!state.is_playing && state.placements.length === 0)
+                ? "disabled"
+                : ""
+            }
+          >
+            ${state.is_playing && timelinePlaybackActive
+              ? `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" /></svg>`
+              : `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7 4l14 8-14 8V4z" fill="currentColor" /></svg>`}
+          </button>
         </div>
       </div>
-      <div class="timeline__scroll" data-timeline-drop>
+      <div class="timeline__scroll" data-timeline-drop aria-label="Timeline. Pinch to zoom." style="--timeline-px-per-pulse: ${timelineZoomPxPerPulse}px;">
         <div class="timeline__track">
           ${timelineGrid(state)}
           <div class="timeline__placements">${timelinePlacements(state)}</div>
@@ -747,11 +759,28 @@ function render(root: HTMLElement, state: ProjectState): void {
     input?.focus();
     input?.select();
   }
+  // A live-note event rerenders the whole app, replacing the element that
+  // owns the take editor's horizontal scroll position. Put its replacement
+  // straight back under the live playhead so playing another key cannot
+  // interrupt recording auto-scroll until the next animation frame.
+  syncLiveTakeScroll(root, state);
   // Auto-scroll during recording is driven solely by `runLivePlayhead`, in
   // step with the playhead line's own position — not from here on every
   // note event, which used to snap the scroll straight to the take editor's
   // full width (however far a newly-landed note had just extended it) and
   // read as a sudden lurch rather than the steady pace the playhead keeps.
+}
+
+/** Keeps the live take editor's scroll position aligned with its playhead.
+ * This is called both by the animation frame and immediately after a render:
+ * live note events replace the editor DOM, so its native `scrollLeft` would
+ * otherwise reset to zero whenever a note is played. */
+function syncLiveTakeScroll(root: HTMLElement, state: ProjectState): void {
+  if (!state.is_recording || liveRecordingAnchorMs === null) return;
+  const editor = root.querySelector<HTMLElement>("[data-live-take-editor] .take-editor__notes");
+  if (!editor) return;
+  const pulses = liveElapsedPulses(state.bpm);
+  editor.scrollLeft = Math.max(editor.scrollLeft, pulses * 32 - editor.clientWidth + 40);
 }
 
 function clampBpm(bpm: number): number {
@@ -871,8 +900,7 @@ function runLivePlayhead(root: HTMLElement): void {
       if (line) {
         const pulses = elapsedMs / pulseElapsedMs(1, currentState.bpm);
         line.style.transform = `translateX(${pulses * 32}px)`;
-        const editor = line.parentElement;
-        if (editor) editor.scrollLeft = Math.max(editor.scrollLeft, pulses * 32 - editor.clientWidth + 40);
+        syncLiveTakeScroll(root, currentState);
       }
     }
     livePlayheadFrame = requestAnimationFrame(tick);
@@ -1282,18 +1310,13 @@ function wireQuitWarning(root: HTMLElement): void {
   });
 }
 
-/** Zoom is a view setting (#16), so this only ever re-renders locally —
- * there is no command to send, and nothing about the change is worth the
- * core knowing. */
+/** Pinching over the timeline produces a Ctrl-modified WheelEvent in macOS
+ * browsers. Zoom around the pointer, so the musical moment under the gesture
+ * stays in place. The CSS custom property updates the timeline in place,
+ * avoiding a whole-app render on every pinch delta. */
 function wireTimelineControls(root: HTMLElement): void {
   root.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
-
-    const zoomButton = target.closest<HTMLButtonElement>("[data-timeline-zoom]");
-    if (zoomButton?.dataset.timelineZoom) {
-      timelineZoom = zoomButton.dataset.timelineZoom as TimelineZoom;
-      render(root, currentState!);
-    }
 
     if (target.closest("[data-play-timeline]")) {
       if (currentState?.is_playing) {
@@ -1307,6 +1330,26 @@ function wireTimelineControls(root: HTMLElement): void {
       void exportTimelineAsMidi();
     }
   });
+
+  root.addEventListener("wheel", (event) => {
+    if (!event.ctrlKey) return;
+    const scroll = (event.target as HTMLElement).closest<HTMLElement>(".timeline__scroll");
+    if (!scroll || !currentState) return;
+
+    event.preventDefault();
+    const nextZoom = Math.min(
+      TIMELINE_ZOOM_MAX,
+      Math.max(TIMELINE_ZOOM_MIN, timelineZoomPxPerPulse * Math.exp(-event.deltaY * TIMELINE_ZOOM_SENSITIVITY)),
+    );
+    if (nextZoom === timelineZoomPxPerPulse) return;
+
+    const rect = scroll.getBoundingClientRect();
+    const pointerOffset = event.clientX - rect.left;
+    const pulseAtPointer = (scroll.scrollLeft + pointerOffset) / timelineZoomPxPerPulse;
+    timelineZoomPxPerPulse = nextZoom;
+    scroll.style.setProperty("--timeline-px-per-pulse", `${nextZoom}px`);
+    scroll.scrollLeft = Math.max(0, pulseAtPointer * nextZoom - pointerOffset);
+  }, { passive: false });
 
   root.addEventListener("change", (event) => {
     const input = event.target as HTMLInputElement;
@@ -1364,7 +1407,7 @@ function computeDropIndex(event: DragEvent, track: number): number {
   const trackEl = (event.target as HTMLElement).closest<HTMLElement>(".timeline__track");
   if (!trackEl) return ordered.length;
   const dropX = event.clientX - trackEl.getBoundingClientRect().left;
-  const pxPerPulse = TIMELINE_ZOOM_PX_PER_PULSE[timelineZoom];
+  const pxPerPulse = timelineZoomPxPerPulse;
   for (const [index, placement] of ordered.entries()) {
     const length = placement.notes.reduce((end, note) => Math.max(end, note.end_pulse), 0);
     const midpoint = (placement.start_pulse + length / 2) * pxPerPulse;
@@ -1391,7 +1434,7 @@ function computeDropGap(
 ): number {
   const trackEl = (event.target as HTMLElement).closest<HTMLElement>(".timeline__track");
   if (!trackEl) return 0;
-  const pxPerPulse = TIMELINE_ZOOM_PX_PER_PULSE[timelineZoom];
+  const pxPerPulse = timelineZoomPxPerPulse;
   const dropX = event.clientX - trackEl.getBoundingClientRect().left;
   const dropPulse = Math.max(0, Math.round(dropX / pxPerPulse));
 
@@ -1500,7 +1543,7 @@ function wireBlockPlacementDragAndDrop(root: HTMLElement): void {
 
 /**
  * Selecting a placement on the timeline and removing it with `Delete`
- * (issue #21). Selection is a view concern, like `timelineZoom` — clicking a
+ * (issue #21). Selection is a view concern, like `timelineZoomPxPerPulse` — clicking a
  * placement selects it, clicking anywhere else on the timeline clears the
  * selection, and `Delete`/`Backspace` sends `Command::DeletePlacement` for
  * whichever placement is currently selected.
@@ -1810,7 +1853,25 @@ function wireRecordingControls(root: HTMLElement): void {
     if (!input.matches("[data-trim-start], [data-trim-end]")) return;
     const start = root.querySelector<HTMLInputElement>("[data-trim-start]");
     const end = root.querySelector<HTMLInputElement>("[data-trim-end]");
-    if (start && end) void setTakeTrim(root, Number(start.value), Number(end.value));
+    if (start && end) {
+      previewTakeTrim(root, Number(start.value), Number(end.value));
+      void setTakeTrim(root, Number(start.value), Number(end.value));
+    }
+  });
+
+  root.addEventListener("input", (event) => {
+    const input = event.target as HTMLInputElement;
+    if (!input.matches("[data-trim-start], [data-trim-end]")) return;
+    const start = root.querySelector<HTMLInputElement>("[data-trim-start]");
+    const end = root.querySelector<HTMLInputElement>("[data-trim-end]");
+    if (!start || !end) return;
+    if (input.matches("[data-trim-start]") && Number(start.value) > Number(end.value)) {
+      end.value = start.value;
+    }
+    if (input.matches("[data-trim-end]") && Number(end.value) < Number(start.value)) {
+      start.value = end.value;
+    }
+    previewTakeTrim(root, Number(start.value), Number(end.value));
   });
 
   root.addEventListener("change", (event) => {

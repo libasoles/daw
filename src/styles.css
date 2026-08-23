@@ -678,13 +678,18 @@ body {
 
 .take-editor {
   position: relative;
-  overflow-x: auto;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-base);
 }
 
-.take-editor svg {
+.take-editor__notes {
+  position: relative;
+  overflow-x: auto;
+}
+
+.take-editor__notes svg {
   display: block;
   width: auto;
   min-width: 100%;
@@ -709,28 +714,44 @@ body {
   font-size: var(--text-xs);
 }
 
-.take-trim-handles {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-1);
-  padding: var(--space-1);
+.take-trim-range {
+  position: relative;
+  height: 24px;
+  padding: 0 var(--space-2);
   background: var(--surface-raised);
 }
 
+.take-trim-range__track {
+  position: absolute;
+  top: 10px;
+  right: var(--space-2);
+  left: var(--space-2);
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--line) 0 var(--trim-start),
+    var(--accent) var(--trim-start) var(--trim-end),
+    var(--line) var(--trim-end) 100%
+  );
+}
+
 .take-trim-handle {
-  width: 100%;
-  height: 16px;
-  --pct: 0%;
+  position: absolute;
+  top: 0;
+  left: var(--space-2);
+  width: calc(100% - var(--space-2) * 2);
+  height: 24px;
   appearance: none;
   -webkit-appearance: none;
   background: transparent;
-  accent-color: var(--accent);
+  pointer-events: none;
 }
 
 .take-trim-handle::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 2px;
-  background: linear-gradient(to right, var(--accent) var(--pct), var(--line) var(--pct));
+  background: transparent;
 }
 
 .take-trim-handle::-webkit-slider-thumb {
@@ -741,13 +762,14 @@ body {
   border-radius: 50%;
   background: var(--ink);
   margin-top: -5px;
-  cursor: default;
+  cursor: ew-resize;
+  pointer-events: auto;
 }
 
 .take-trim-handle::-moz-range-track {
   height: 4px;
   border-radius: 2px;
-  background: linear-gradient(to right, var(--accent) var(--pct), var(--line) var(--pct));
+  background: transparent;
 }
 
 .take-trim-handle::-moz-range-thumb {
@@ -756,7 +778,18 @@ body {
   border: none;
   border-radius: 50%;
   background: var(--ink);
-  cursor: default;
+  cursor: ew-resize;
+  pointer-events: auto;
+}
+
+.take-trim-handle:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.take-trim-handle:focus-visible::-moz-range-thumb {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .take-grid line {
@@ -766,6 +799,11 @@ body {
 
 .take-notes rect {
   fill: var(--accent);
+  transition: opacity 140ms ease;
+}
+
+.take-notes .take-note--softened {
+  opacity: 0.28;
 }
 
 .take-editor--live {
@@ -907,46 +945,10 @@ body {
   color: var(--ink-dim);
 }
 
-.timeline__play,
-.timeline__export {
-  font: inherit;
-  font-size: var(--text-xs);
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-raised);
-  color: var(--ink);
-}
-
-.timeline__play:hover:not(:disabled),
-.timeline__export:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.timeline__play:disabled,
-.timeline__export:disabled {
-  color: var(--ink-faint);
-}
-
-.timeline__zoom {
+.timeline__actions {
   display: flex;
+  align-items: center;
   gap: var(--space-1);
-}
-
-.timeline__zoom button {
-  font: inherit;
-  font-size: var(--text-xs);
-  padding: 0 var(--space-1);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-raised);
-  color: var(--ink-dim);
-}
-
-.timeline__zoom button[aria-pressed="true"] {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 .timeline__scroll {
@@ -988,6 +990,8 @@ body {
 .timeline-placement {
   position: absolute;
   top: 8px;
+  left: calc(var(--placement-start) * var(--timeline-px-per-pulse));
+  width: max(calc(var(--placement-length) * var(--timeline-px-per-pulse)), 2px);
   height: 104px;
   overflow: hidden;
   padding: var(--space-1);
@@ -1016,7 +1020,7 @@ body {
     transform: translateX(0);
   }
   to {
-    transform: translateX(var(--playhead-distance));
+    transform: translateX(calc(var(--playhead-distance) * var(--timeline-px-per-pulse)));
   }
 }
 
