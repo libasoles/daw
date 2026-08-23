@@ -231,6 +231,7 @@ export interface MidiDevice {
 export interface MidiStatus {
   devices: MidiDevice[];
   selectedDeviceId: string | null;
+  connected: boolean;
   message: string;
 }
 

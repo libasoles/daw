@@ -58,7 +58,8 @@ fn opening_a_saved_project_restores_every_setting_and_every_block() {
 
     // A freshly opened project starts clean: further saves stay disabled
     // until something actually changes.
-    reopened.apply(Command::ProjectSaved);
+    let document = reopened.project_document();
+    reopened.apply(Command::ProjectSaved(document));
     assert!(!reopened.state().is_dirty);
 }
 

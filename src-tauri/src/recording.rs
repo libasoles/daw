@@ -12,9 +12,11 @@ use std::time::{Duration, Instant};
 
 use daw_core::ports::MidiEventKind;
 use daw_core::{
-    build_take, count_in_length_in_pulses, pulse_elapsed_time, CapturedEvent, ProjectState, Take,
+    build_take, count_in_length_in_pulses, pulse_at_elapsed_time, pulse_elapsed_time,
+    CapturedEvent, ProjectState, Take,
 };
-use tauri::{AppHandle, Manager};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::AudioEngineHandle;
 
@@ -27,6 +29,19 @@ pub struct RecordingSession {
     /// count-in, not the take, and are discarded by `capture_live_note`.
     anchor: Option<Instant>,
     events: Vec<CapturedEvent>,
+    bpm: u16,
+}
+
+/// Emitted to the frontend for every note on/off observed while a session is
+/// open, so the take grid can draw notes as they're played instead of only
+/// once recording stops. `pulse` is already converted from wall-clock time
+/// using the take's bpm, matching the pulse offsets `RecordedNote` stores.
+#[derive(Clone, Serialize)]
+struct LiveNoteEvent {
+    pitch: u8,
+    velocity: u8,
+    pulse: u64,
+    is_on: bool,
 }
 
 /// Opens a fresh capture buffer right after `StartRecording` succeeds. If a
@@ -39,6 +54,7 @@ pub fn begin_session(app: &AppHandle, state: &ProjectState) {
     *handle.0.lock().expect("recording mutex poisoned") = Some(RecordingSession {
         anchor: None,
         events: Vec::new(),
+        bpm: state.bpm,
     });
 
     let count_in = state
@@ -106,12 +122,24 @@ pub fn capture_live_note(app: &AppHandle, kind: MidiEventKind, received_at: Inst
         MidiEventKind::NoteOn { pitch, velocity } => (true, pitch, velocity),
         MidiEventKind::NoteOff { pitch } => (false, pitch, 0),
     };
+    let elapsed = received_at.duration_since(anchor);
+    let pulse = pulse_at_elapsed_time(elapsed, session.bpm);
     session.events.push(CapturedEvent {
-        elapsed: received_at.duration_since(anchor),
+        elapsed,
         pitch,
         velocity,
         is_on,
     });
+
+    let _ = app.emit(
+        "live-note",
+        LiveNoteEvent {
+            pitch,
+            velocity,
+            pulse,
+            is_on,
+        },
+    );
 }
 
 /// Closes the session (if any) and turns its raw capture into a [`Take`].

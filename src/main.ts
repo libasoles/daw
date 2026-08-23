@@ -35,9 +35,11 @@ import {
   type MidiStatus,
   type ProjectState,
   type Quantisation,
+  type RecordedNote,
   type RecoverySnapshot,
 } from "./core";
 import { GM_CATEGORIES, GM_INSTRUMENTS } from "./gmInstruments";
+import { listen } from "@tauri-apps/api/event";
 
 /** Three stacked blocks on a timeline — the shape the whole app is about.
  * Shown only on the boot splash; the working UI never repeats the mark. */
@@ -93,6 +95,11 @@ let libraryCollapsed = false;
 let inspectorCollapsed = false;
 let projectMenuOpen = false;
 let midiStatus: MidiStatus | null = null;
+/** Notes captured so far in the take currently being recorded, updated live
+ * from the backend's "live-note" event — see `wireLiveNoteFeed`. Cleared
+ * whenever a recording starts or ends, since `state.take` only reflects the
+ * finished take once recording stops. */
+let liveNotes: RecordedNote[] = [];
 
 /**
  * A "new project" / "switch project" / "quit" the user asked for while there
@@ -215,6 +222,21 @@ function timelinePlayhead(state: ProjectState): string {
   return `<div class="timeline-playhead" style="--playhead-distance: ${distance}px; animation-duration: ${durationMs}ms; animation-iteration-count: ${iterationCount};" aria-hidden="true"></div>`;
 }
 
+/** Notes as they're captured mid-recording, from `liveNotes` — same visual
+ * language as `takeGrid` but no trim handles, since there is no finished
+ * take yet to trim. The grid grows to fit the furthest note played so far. */
+function liveTakeGrid(notes: RecordedNote[]): string {
+  const end = notes.reduce((max, note) => Math.max(max, note.end_pulse), 0);
+  const width = Math.max(end, 1) * 32;
+  const lines = Array.from({ length: end + 1 }, (_, pulse) =>
+    `<line x1="${pulse * 32}" y1="0" x2="${pulse * 32}" y2="88" />`,
+  ).join("");
+  const rects = notes.map((note) =>
+    `<rect x="${note.start_pulse * 32}" y="${72 - note.pitch % 5 * 12}" width="${Math.max(2, (note.end_pulse - note.start_pulse) * 32)}" height="9" rx="2" />`,
+  ).join("");
+  return `<div class="take-editor take-editor--live"><svg viewBox="0 0 ${width} 88" aria-label="Notes captured so far"><g class="take-grid">${lines}</g><g class="take-notes take-notes--live">${rects}</g></svg></div>`;
+}
+
 /** Shown once at boot, while the first `fetchProjectState()` is in flight.
  * The mark/name/tagline never appear again once the working UI renders. */
 function renderSplash(root: HTMLElement): void {
@@ -269,6 +291,17 @@ function topbar(state: ProjectState): string {
       </div>
       <div class="topbar-spacer" data-tauri-drag-region></div>
       <div class="transport">
+        <label class="pulse-toggle pulse-toggle--icon pulse-toggle--transport count-in-toggle" title="One-bar count-in">
+          <input type="checkbox" data-count-in aria-label="One-bar count-in"${state.count_in_enabled ? " checked" : ""} />
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7" />
+            <text x="12" y="15.5" text-anchor="middle" fill="currentColor" font-family="system-ui, sans-serif" font-size="10" font-weight="700">123</text>
+          </svg>
+        </label>
+        <label class="pulse-toggle pulse-toggle--icon pulse-toggle--transport metronome-toggle" title="Metronome">
+          <input type="checkbox" data-metronome aria-label="Metronome"${state.metronome_enabled ? " checked" : ""} />
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M7.5 19h9L14.4 6H9.6L7.5 19zm4.5-9v5m-2 4h4M11 3h2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        </label>
         <div class="tempo" role="group" aria-label="Tempo">
           <button class="tempo__step" type="button" data-tempo-step="-1" aria-label="Decrease tempo">&minus;</button>
           <label class="tempo__readout">
@@ -286,15 +319,6 @@ function topbar(state: ProjectState): string {
           </label>
           <button class="tempo__step" type="button" data-tempo-step="1" aria-label="Increase tempo">+</button>
         </div>
-        <button
-          class="record-button${state.is_recording ? " record-button--active" : ""}"
-          type="button"
-          data-record
-          aria-pressed="${state.is_recording}"
-          ${state.is_playing ? "disabled" : ""}
-        >
-          ${state.is_recording ? "Stop (R)" : "Record (R)"}
-        </button>
       </div>
     </header>
   `;
@@ -378,20 +402,60 @@ function canvasPane(state: ProjectState): string {
       <div class="canvas-head">
         <div>
           <h2>Current take</h2>
-          <span class="meta">${state.take ? `${state.take.notes.length} note${state.take.notes.length === 1 ? "" : "s"}` : "no take yet"}</span>
+          <span class="meta">${(() => {
+            const count = state.is_recording ? liveNotes.length : state.take?.notes.length;
+            if (count === undefined) return "no take yet";
+            return `${count} note${count === 1 ? "" : "s"}`;
+          })()}</span>
         </div>
-        ${state.take ? /* html */ `
-          <div class="canvas-actions">
-            <button class="take-play" type="button" data-play-take ${state.is_playing ? "disabled" : ""}>Play take</button>
+        <div class="canvas-actions">
+          <button
+            class="icon-button icon-button--lg record-button${state.is_recording ? " record-button--active" : ""}"
+            type="button"
+            data-record
+            aria-pressed="${state.is_recording}"
+            aria-label="${state.is_recording ? "Stop recording" : "Record"}"
+            title="${state.is_recording ? "Stop (R)" : "Record (R)"}"
+            ${state.is_playing ? "disabled" : ""}
+          >
+            ${state.is_recording
+              ? `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" /></svg>`
+              : `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="currentColor" /></svg>`}
+          </button>
+          <button
+            class="icon-button icon-button--lg play-icon"
+            type="button"
+            data-play-take
+            aria-label="Play take"
+            title="Play take"
+            ${!state.take || state.is_playing ? "disabled" : ""}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M7 4l14 8-14 8V4z" fill="currentColor" /></svg>
+          </button>
+          ${state.take ? /* html */ `
             <select data-quantisation aria-label="Quantisation">
               ${(["off", "whole", "half", "quarter", "eighth"] as Quantisation[]).map((value) => `<option value="${value}"${state.take?.quantisation === value ? " selected" : ""}>${value}</option>`).join("")}
             </select>
-            <button type="button" data-add-to-library>Add to library</button>
-          </div>
-        ` : ""}
+            <button
+              class="icon-button library-add-button"
+              type="button"
+              data-add-to-library
+              aria-label="Add take to library"
+              title="Add take to library"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M5 5.5A1.5 1.5 0 0 1 6.5 4h11A1.5 1.5 0 0 1 19 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 18.5v-13zM12 8v8m-4-4h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
+            </button>
+          ` : ""}
+        </div>
       </div>
 
-      ${state.take ? takeGrid(state) : `<span class="take-summary--empty">Press Record to capture a take</span>`}
+      ${state.is_recording
+        ? liveNotes.length
+          ? liveTakeGrid(liveNotes)
+          : `<span class="take-summary--empty">Listening for notes&hellip;</span>`
+        : state.take
+          ? takeGrid(state)
+          : `<span class="take-summary--empty">Press Record to capture a take</span>`}
     </section>
   `;
 }
@@ -464,25 +528,16 @@ function inspectorPane(state: ProjectState): string {
             </select>
           </span>
         </label>
-        <label class="pulse-toggle">
-          <input type="checkbox" data-metronome${state.metronome_enabled ? " checked" : ""} />
-          <span>Metronome</span>
-        </label>
-        <label class="pulse-toggle">
-          <input type="checkbox" data-count-in${state.count_in_enabled ? " checked" : ""} />
-          <span>One-bar count-in</span>
-        </label>
       </div>
 
       <hr class="divider" />
 
       <div class="inspector-section" aria-label="MIDI input">
-        <p class="pane-title">MIDI</p>
-        <label class="sound-control">
-          <span class="sound-control__label">MIDI input</span>
-          ${midiSelectMarkup()}
-        </label>
-        <p class="midi-control__status" data-midi-status aria-live="polite">${midiStatus ? escapeHtml(midiStatus.message) : "Checking MIDI inputs…"}</p>
+        <div class="midi-section__header">
+          <p class="pane-title">MIDI</p>
+          ${midiConnectionMarkup()}
+        </div>
+        ${midiSelectMarkup()}
         <button class="test-note" type="button" data-play-test-note>Play test note</button>
       </div>
     </aside>
@@ -501,6 +556,12 @@ function midiSelectMarkup(): string {
     ${!status.selectedDeviceId ? `<option value="" disabled selected>Choose a MIDI input…</option>` : ""}
     ${status.devices.map((device) => `<option value="${device.id}"${device.id === status.selectedDeviceId ? " selected" : ""}>${escapeHtml(device.name)}</option>`).join("")}
   </select>`;
+}
+
+function midiConnectionMarkup(): string {
+  const connected = midiStatus?.connected ?? false;
+  const label = connected ? "MIDI input connected" : "MIDI input not connected";
+  return `<span class="midi-control__connection${connected ? " is-connected" : ""}" data-midi-status role="status" aria-label="${label}" title="${label}"></span>`;
 }
 
 function statusBar(state: ProjectState): string {
@@ -639,11 +700,13 @@ async function startRecording(root: HTMLElement): Promise<void> {
     render(root, forced.state);
     return;
   }
+  liveNotes = [];
   render(root, applied.state);
 }
 
 async function endRecording(root: HTMLElement): Promise<void> {
   const applied = await stopRecording();
+  liveNotes = [];
   render(root, applied.state);
 }
 
@@ -699,6 +762,44 @@ function schedulePlaybackRefresh(root: HTMLElement, totalPulses: number, bpm: nu
       schedulePlaybackRefresh(root, totalPulses, bpm);
     });
   }, durationMs + 50);
+}
+
+interface LiveNoteEvent {
+  pitch: number;
+  velocity: number;
+  pulse: number;
+  is_on: boolean;
+}
+
+/** Live counterpart to `wireRecordingControls`: listens for the backend's
+ * "live-note" event (emitted per note on/off while a session is open, see
+ * `src-tauri/src/recording.rs`) and keeps `liveNotes` in sync so the take
+ * grid can show notes as they're played, before recording stops and
+ * `state.take` exists. A note-on opens a note with `end_pulse` equal to its
+ * `start_pulse`; the matching note-off closes the most recent still-open
+ * note at that pitch. */
+function wireLiveNoteFeed(root: HTMLElement): void {
+  listen<LiveNoteEvent>("live-note", (event) => {
+    const { pitch, velocity, pulse, is_on } = event.payload;
+    if (is_on) {
+      liveNotes = [...liveNotes, { pitch, velocity, start_pulse: pulse, end_pulse: pulse }];
+    } else {
+      let openIndex = -1;
+      for (let index = liveNotes.length - 1; index >= 0; index -= 1) {
+        const note = liveNotes[index];
+        if (note && note.pitch === pitch && note.end_pulse === note.start_pulse) {
+          openIndex = index;
+          break;
+        }
+      }
+      if (openIndex !== -1) {
+        liveNotes = liveNotes.map((note, index) =>
+          index === openIndex ? { ...note, end_pulse: Math.max(pulse, note.start_pulse) } : note,
+        );
+      }
+    }
+    if (currentState?.is_recording) render(root, currentState);
+  }).catch((error: unknown) => console.error("could not listen for live-note:", error));
 }
 
 async function playTake(root: HTMLElement): Promise<void> {
@@ -1359,6 +1460,7 @@ function renderMidiStatus(root: HTMLElement, status: MidiStatus): void {
   const unchanged = midiStatus !== null
     && midiStatus.message === status.message
     && midiStatus.selectedDeviceId === status.selectedDeviceId
+    && midiStatus.connected === status.connected
     && midiStatus.devices.length === status.devices.length
     && midiStatus.devices.every((device, index) => device.id === status.devices[index]?.id && device.name === status.devices[index]?.name);
   midiStatus = status;
@@ -1366,12 +1468,19 @@ function renderMidiStatus(root: HTMLElement, status: MidiStatus): void {
   if (currentState) render(root, currentState);
 }
 
+function showMidiConnectionStatus(root: HTMLElement, connected: boolean, label: string): void {
+  const indicator = root.querySelector<HTMLElement>("[data-midi-status]");
+  if (!indicator) return;
+  indicator.classList.toggle("is-connected", connected);
+  indicator.setAttribute("aria-label", label);
+  indicator.title = label;
+}
+
 async function refreshMidiDevices(root: HTMLElement): Promise<void> {
   try {
     renderMidiStatus(root, await listMidiDevices());
   } catch (error: unknown) {
-    const status = root.querySelector<HTMLElement>("[data-midi-status]");
-    if (status) status.textContent = `Could not check MIDI inputs: ${String(error)}`;
+    showMidiConnectionStatus(root, false, `Could not check MIDI inputs: ${String(error)}`);
   }
 }
 
@@ -1384,8 +1493,7 @@ function wireMidiPicker(root: HTMLElement): void {
     selectMidiDevice(deviceId)
       .then((status) => renderMidiStatus(root, status))
       .catch((error: unknown) => refreshMidiDevices(root).then(() => {
-        const status = root.querySelector<HTMLElement>("[data-midi-status]");
-        if (status) status.textContent = `Could not select MIDI input: ${String(error)}`;
+        showMidiConnectionStatus(root, false, `Could not select MIDI input: ${String(error)}`);
       }));
   });
 }
@@ -1564,6 +1672,7 @@ async function main(): Promise<void> {
   wireBlockPlacementDragAndDrop(root);
   wireTimelineSelection(root);
   wireLayoutControls(root);
+  wireLiveNoteFeed(root);
   await refreshMidiDevices(root);
   window.setInterval(() => void refreshMidiDevices(root), 1_000);
 

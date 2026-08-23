@@ -43,7 +43,8 @@ fn new_project_forced_after_confirmation_resets_state_and_clears_undo_history() 
 #[test]
 fn a_project_with_no_unsaved_changes_opens_a_new_one_without_confirmation() {
     let mut core = DawCore::new();
-    core.apply(Command::ProjectSaved);
+    let document = core.project_document();
+    core.apply(Command::ProjectSaved(document));
     assert!(!core.state().is_dirty);
 
     let applied = core.apply(Command::NewProject { force: false });

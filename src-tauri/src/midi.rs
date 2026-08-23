@@ -28,6 +28,7 @@ const PREFERENCE_FILE: &str = "midi-input-device-id";
 pub struct MidiStatus {
     pub devices: Vec<MidiDevice>,
     pub selected_device_id: Option<String>,
+    pub connected: bool,
     pub message: String,
 }
 
@@ -159,6 +160,7 @@ impl MidiController {
             status: MidiStatus {
                 devices: Vec::new(),
                 selected_device_id: None,
+                connected: false,
                 message: "Checking MIDI inputs…".into(),
             },
         }
@@ -173,6 +175,7 @@ impl MidiController {
                 self.status = MidiStatus {
                     devices: Vec::new(),
                     selected_device_id: self.selected_device_id.clone(),
+                    connected: false,
                     message: format!("Could not read MIDI inputs: {error}"),
                 };
                 return;
@@ -196,6 +199,7 @@ impl MidiController {
                 },
                 devices,
                 selected_device_id: self.selected_device_id.clone(),
+                connected: false,
             };
             return;
         }
@@ -212,6 +216,7 @@ impl MidiController {
                 self.status = MidiStatus {
                     devices,
                     selected_device_id: Some(selected),
+                    connected: false,
                     message: format!("Could not connect MIDI input: {error}"),
                 };
                 return;
@@ -221,6 +226,7 @@ impl MidiController {
         self.status = MidiStatus {
             devices,
             selected_device_id: self.selected_device_id.clone(),
+            connected: true,
             message: "MIDI input connected.".into(),
         };
     }

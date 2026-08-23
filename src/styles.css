@@ -261,7 +261,7 @@ body {
   gap: var(--space-1);
 }
 
-.project-controls button,
+.project-controls button:not(.icon-button),
 .project-controls input {
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--line);
@@ -271,7 +271,7 @@ body {
   font: inherit;
 }
 
-.project-controls button:disabled {
+.project-controls button:not(.icon-button):disabled {
   color: var(--ink-faint);
 }
 
@@ -308,7 +308,7 @@ body {
 
 .tempo__readout {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-1);
   padding: 0 var(--space-2);
   height: 2.25rem;
@@ -346,26 +346,45 @@ body {
   text-transform: lowercase;
 }
 
-.record-button {
-  height: 2.25rem;
-  padding: 0 var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
   background: var(--surface-raised);
   color: var(--ink);
-  font-size: var(--text-xs);
   cursor: default;
 }
 
-.record-button:hover:not(:disabled) {
-  border-color: var(--rec);
+.icon-button:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.icon-button:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
+
+.icon-button--lg {
+  width: 2.75rem;
+  height: 2.75rem;
+}
+
+.record-button {
   color: var(--rec);
 }
 
+.record-button:hover:not(:disabled) {
+  color: var(--rec);
+  filter: brightness(1.15);
+}
+
 .record-button--active {
-  border-color: var(--rec);
-  background: var(--rec);
-  color: var(--surface-base);
+  background: color-mix(in srgb, var(--rec) 18%, var(--surface-raised));
 }
 
 .record-button:disabled {
@@ -555,7 +574,7 @@ body {
 }
 
 .canvas-actions select,
-.canvas-actions button {
+.canvas-actions button:not(.icon-button) {
   font: inherit;
   font-size: var(--text-xs);
   padding: var(--space-1) var(--space-2);
@@ -565,31 +584,24 @@ body {
   color: var(--ink-dim);
 }
 
-.canvas-actions button:hover {
+.canvas-actions button:not(.icon-button):hover {
   color: var(--ink);
 }
 
-.canvas-actions button[data-add-to-library] {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.take-play {
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-raised);
-  color: var(--ink);
-  font-size: var(--text-xs);
-  cursor: default;
-}
-
-.take-play:hover:not(:disabled) {
-  border-color: var(--accent);
+.library-add-button {
   color: var(--accent);
 }
 
-.take-play:disabled {
+.play-icon {
+  color: var(--accent);
+}
+
+.play-icon:hover:not(:disabled) {
+  color: var(--accent);
+  filter: brightness(1.15);
+}
+
+.play-icon:disabled {
   color: var(--ink-faint);
   cursor: not-allowed;
 }
@@ -623,7 +635,11 @@ body {
 
 .take-trim-handle {
   width: 100%;
+  height: 16px;
   --pct: 0%;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
   accent-color: var(--accent);
 }
 
@@ -633,6 +649,32 @@ body {
   background: linear-gradient(to right, var(--accent) var(--pct), var(--line) var(--pct));
 }
 
+.take-trim-handle::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ink);
+  margin-top: -5px;
+  cursor: default;
+}
+
+.take-trim-handle::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) var(--pct), var(--line) var(--pct));
+}
+
+.take-trim-handle::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: var(--ink);
+  cursor: default;
+}
+
 .take-grid line {
   stroke: var(--line);
   stroke-width: 1;
@@ -640,6 +682,14 @@ body {
 
 .take-notes rect {
   fill: var(--accent);
+}
+
+.take-editor--live {
+  border-color: var(--rec);
+}
+
+.take-notes--live rect {
+  fill: var(--rec);
 }
 
 /* --- Inspector: sound, pulse and MIDI settings. ------------------------- */
@@ -934,7 +984,11 @@ body {
 
 .sound-control__range {
   width: 100%;
+  height: 16px;
   --pct: 0%;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
   accent-color: var(--accent);
   cursor: default;
 }
@@ -943,6 +997,32 @@ body {
   height: 4px;
   border-radius: 2px;
   background: linear-gradient(to right, var(--accent) var(--pct), var(--line) var(--pct));
+}
+
+.sound-control__range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ink);
+  margin-top: -5px;
+  cursor: default;
+}
+
+.sound-control__range::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) var(--pct), var(--line) var(--pct));
+}
+
+.sound-control__range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: var(--ink);
+  cursor: default;
 }
 
 .time-signature {
@@ -970,16 +1050,84 @@ body {
   accent-color: var(--accent);
 }
 
-.midi-control {
+.pulse-toggle--icon {
+  position: relative;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.pulse-toggle--icon:hover {
+  color: var(--accent);
+}
+
+.pulse-toggle--icon input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+.pulse-toggle--icon input:checked + svg {
+  color: var(--accent);
+}
+
+.pulse-toggle--icon input:focus-visible + svg {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 999px;
+}
+
+.pulse-toggle--transport {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.metronome-toggle svg {
+  width: 28px;
+  height: 28px;
+}
+
+.midi-control__connection {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+
+.midi-section__header {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: var(--space-1);
 }
 
-.midi-control__status {
+.midi-section__header .pane-title {
   margin: 0;
-  color: var(--ink-faint);
-  font-size: 13px;
+}
+
+.midi-control__connection.is-connected {
+  background: var(--accent);
+}
+
+.test-note {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--ink-dim);
+  font-size: var(--text-xs);
+  cursor: default;
+}
+
+.test-note:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* --- Status bar. --------------------------------------------------------- */
