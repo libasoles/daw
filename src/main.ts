@@ -18,6 +18,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   applyCommand,
   exportMidi,
+  fetchAudioStatus,
   fetchProjectState,
   fetchRecoverySnapshot,
   listProjects,
@@ -29,16 +30,19 @@ import {
   selectMidiDevice,
   stopPlayback,
   stopRecording,
+  type Block,
   type Effect,
   type MidiStatus,
   type ProjectState,
   type Quantisation,
   type RecoverySnapshot,
 } from "./core";
+import { GM_CATEGORIES, GM_INSTRUMENTS } from "./gmInstruments";
 
-/** Three stacked blocks on a timeline — the shape the whole app is about. */
+/** Three stacked blocks on a timeline — the shape the whole app is about.
+ * Shown only on the boot splash; the working UI never repeats the mark. */
 const mark = /* html */ `
-  <svg class="placeholder__mark" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+  <svg class="splash__mark" viewBox="0 0 48 48" fill="none" aria-hidden="true">
     <rect x="4" y="9" width="26" height="8" rx="3" fill="currentColor" />
     <rect x="4" y="20" width="40" height="8" rx="3" fill="currentColor" opacity="0.66" />
     <rect x="4" y="31" width="16" height="8" rx="3" fill="currentColor" opacity="0.4" />
@@ -50,8 +54,6 @@ const BPM_MAX = 300;
 const BPM_STEP = 1;
 const REVERB_MIN = 0;
 const REVERB_MAX = 100;
-const PIANO = 0;
-const ACCORDION = 1;
 
 /** Mirrors `core/src/lib.rs`'s `PULSES_PER_BEAT`. Stored notes are pulse
  * offsets, never beats or bars (CONTEXT.md's "Pulse"), so the timeline has
@@ -87,6 +89,10 @@ let editingBlockId: number | null = null;
  * concern only, like `timelineZoom`, never part of `ProjectState`. `Delete`
  * acts on whichever placement this names. */
 let selectedPlacementId: number | null = null;
+let libraryCollapsed = false;
+let inspectorCollapsed = false;
+let projectMenuOpen = false;
+let midiStatus: MidiStatus | null = null;
 
 /**
  * A "new project" / "switch project" / "quit" the user asked for while there
@@ -129,7 +135,9 @@ function takeGrid(state: ProjectState): string {
   const notes = take.notes.map((note) =>
     `<rect x="${note.start_pulse * 32}" y="${72 - note.pitch % 5 * 12}" width="${Math.max(2, (note.end_pulse - note.start_pulse) * 32)}" height="9" rx="2" />`,
   ).join("");
-  return `<div class="take-editor"><svg viewBox="0 0 ${width} 88" aria-label="Take notes against the pulse grid"><g class="take-grid">${lines}</g><g class="take-notes">${notes}</g></svg><div class="take-trim-handles" aria-label="Trim handles"><input class="take-trim-handle take-trim-handle--start" type="range" data-trim-start min="0" max="${end}" step="1" value="${take.trim.start_pulse}" aria-label="Trim start" /><input class="take-trim-handle take-trim-handle--end" type="range" data-trim-end min="0" max="${end}" step="1" value="${take.trim.end_pulse}" aria-label="Trim end" /></div></div>`;
+  const startPct = end > 0 ? (take.trim.start_pulse / end) * 100 : 0;
+  const endPct = end > 0 ? (take.trim.end_pulse / end) * 100 : 0;
+  return `<div class="take-editor"><svg viewBox="0 0 ${width} 88" aria-label="Take notes against the pulse grid"><g class="take-grid">${lines}</g><g class="take-notes">${notes}</g></svg><div class="take-trim-handles" aria-label="Trim handles"><input class="take-trim-handle take-trim-handle--start" type="range" data-trim-start min="0" max="${end}" step="1" value="${take.trim.start_pulse}" style="--pct: ${startPct}%" aria-label="Trim start" /><input class="take-trim-handle take-trim-handle--end" type="range" data-trim-end min="0" max="${end}" step="1" value="${take.trim.end_pulse}" style="--pct: ${endPct}%" aria-label="Trim end" /></div></div>`;
 }
 
 /**
@@ -207,52 +215,236 @@ function timelinePlayhead(state: ProjectState): string {
   return `<div class="timeline-playhead" style="--playhead-distance: ${distance}px; animation-duration: ${durationMs}ms; animation-iteration-count: ${iterationCount};" aria-hidden="true"></div>`;
 }
 
-function render(root: HTMLElement, state: ProjectState): void {
-  currentState = state;
+/** Shown once at boot, while the first `fetchProjectState()` is in flight.
+ * The mark/name/tagline never appear again once the working UI renders. */
+function renderSplash(root: HTMLElement): void {
   root.innerHTML = /* html */ `
-    <section class="placeholder" data-tauri-drag-region>
+    <section class="splash">
       ${mark}
-      <h1 class="placeholder__name">daw</h1>
-      <p class="placeholder__tagline">
+      <h1 class="splash__name">daw</h1>
+      <p class="splash__tagline">
         Record takes, keep the good ones, arrange them on a timeline.
       </p>
-      <section class="project-controls" aria-label="Projects">
-        <div class="project-controls__actions">
-          <button type="button" data-new-project>New project</button>
-          <button type="button" data-save-project ${state.is_dirty ? "" : "disabled"}>Save</button>
-          <button type="button" data-new-project>New project</button>
-          <span class="project-controls__status">${state.is_dirty ? "Unsaved changes" : "All changes saved"}</span>
-        </div>
-        ${isNamingProject ? /* html */ `
-          <form class="project-controls__name" data-project-name-form>
-            <label>Project name <input data-project-name required autocomplete="off" /></label>
-            <button type="submit">Save project</button>
-            <button type="button" data-cancel-project-name>Cancel</button>
-          </form>
-        ` : ""}
-        <div class="project-controls__list">
-          <span>Projects</span>
-          ${projects.length ? projects.map((name) => `<button type="button" data-open-project="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("") : "<span class=\"project-controls__empty\">No saved projects yet</span>"}
-        </div>
-      </section>
-      <div class="tempo" role="group" aria-label="Tempo">
-        <button class="tempo__step" type="button" data-tempo-step="-1" aria-label="Decrease tempo">&minus;</button>
-        <label class="tempo__readout">
-          <input
-            class="tempo__input"
-            type="number"
-            inputmode="numeric"
-            min="${BPM_MIN}"
-            max="${BPM_MAX}"
-            step="${BPM_STEP}"
-            value="${state.bpm}"
-            aria-label="Tempo in beats per minute"
-          />
-          <span class="tempo__unit">bpm</span>
-        </label>
-        <button class="tempo__step" type="button" data-tempo-step="1" aria-label="Increase tempo">+</button>
+    </section>
+  `;
+}
+
+function projectControlsPanel(state: ProjectState): string {
+  return /* html */ `
+    <section class="project-controls" aria-label="Projects">
+      <div class="project-controls__actions">
+        <button type="button" data-new-project>New project</button>
+        <button type="button" data-save-project ${state.is_dirty ? "" : "disabled"}>Save</button>
+        <button type="button" data-new-project>New project</button>
+        <span class="project-controls__status">${state.is_dirty ? "Unsaved changes" : "All changes saved"}</span>
       </div>
-      <div class="pulse-controls" aria-label="Pulse controls">
+      ${isNamingProject ? /* html */ `
+        <form class="project-controls__name" data-project-name-form>
+          <label>Project name <input data-project-name required autocomplete="off" /></label>
+          <button type="submit">Save project</button>
+          <button type="button" data-cancel-project-name>Cancel</button>
+        </form>
+      ` : ""}
+      <div class="project-controls__list">
+        <span>Projects</span>
+        ${projects.length ? projects.map((name) => `<button type="button" data-open-project="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("") : "<span class=\"project-controls__empty\">No saved projects yet</span>"}
+      </div>
+    </section>
+  `;
+}
+
+/** The merged transport bar: it is both the project menu and the only
+ * `data-tauri-drag-region` in the app, so it must stay mostly empty. */
+function topbar(state: ProjectState): string {
+  const menuOpen = projectMenuOpen || isNamingProject;
+  return /* html */ `
+    <header class="topbar" data-tauri-drag-region>
+      <div class="project-menu-wrap">
+        <button class="project-menu" type="button" data-project-menu-toggle aria-expanded="${menuOpen}">
+          <span class="project-menu__dot${state.is_dirty ? " is-dirty" : ""}"></span>
+          <span class="project-menu__label">${activeProjectName ? escapeHtml(activeProjectName) : "Unsaved project"}</span>
+          <span class="project-menu__caret">&#9662;</span>
+        </button>
+        ${menuOpen ? projectControlsPanel(state) : ""}
+      </div>
+      <div class="topbar-spacer" data-tauri-drag-region></div>
+      <div class="transport">
+        <div class="tempo" role="group" aria-label="Tempo">
+          <button class="tempo__step" type="button" data-tempo-step="-1" aria-label="Decrease tempo">&minus;</button>
+          <label class="tempo__readout">
+            <input
+              class="tempo__input"
+              type="number"
+              inputmode="numeric"
+              min="${BPM_MIN}"
+              max="${BPM_MAX}"
+              step="${BPM_STEP}"
+              value="${state.bpm}"
+              aria-label="Tempo in beats per minute"
+            />
+            <span class="tempo__unit">bpm</span>
+          </label>
+          <button class="tempo__step" type="button" data-tempo-step="1" aria-label="Increase tempo">+</button>
+        </div>
+        <button
+          class="record-button${state.is_recording ? " record-button--active" : ""}"
+          type="button"
+          data-record
+          aria-pressed="${state.is_recording}"
+          ${state.is_playing ? "disabled" : ""}
+        >
+          ${state.is_recording ? "Stop (R)" : "Record (R)"}
+        </button>
+      </div>
+    </header>
+  `;
+}
+
+function libraryBlock(state: ProjectState, block: Block, index: number): string {
+  return /* html */ `
+    <div class="library-block" style="--block-color: ${block.color}" draggable="true" data-drag-block="${block.id}">
+      <span class="library-block__swatch"></span>
+      ${block.id === editingBlockId
+        ? `<input class="library-block__name-input" data-block-name-input="${block.id}" value="${escapeHtml(block.name)}" aria-label="Block name" />`
+        : `<span class="library-block__name" data-block-name="${block.id}">${escapeHtml(block.name)}</span>`}
+      <input data-block-color="${block.id}" type="color" value="${block.color}" />
+      <button type="button" data-delete-block="${block.id}">Delete</button>
+      <button type="button" data-play-block="${index}"${state.is_playing ? " disabled" : ""}>Play</button>
+    </div>
+  `;
+}
+
+function libraryPane(state: ProjectState): string {
+  return /* html */ `
+    <aside class="library${libraryCollapsed ? " is-collapsed" : ""}" aria-label="Library">
+      <div class="pane-header">
+        <h2 class="pane-title">Library</h2>
+        <button class="collapse-btn" type="button" data-toggle-library aria-label="${libraryCollapsed ? "Expand library" : "Collapse library"}">${libraryCollapsed ? "&rsaquo;" : "&lsaquo;"}</button>
+      </div>
+      ${state.blocks.length
+        ? state.blocks.map((block, index) => libraryBlock(state, block, index)).join("")
+        : `<span class="library-empty">no blocks yet</span>`}
+    </aside>
+  `;
+}
+
+function timelinePane(state: ProjectState): string {
+  return /* html */ `
+    <section class="timeline" aria-label="Timeline">
+      <div class="timeline__header">
+        <h2>Timeline</h2>
+        <button
+          class="timeline__play"
+          type="button"
+          data-play-timeline
+          ${
+            (state.is_playing && !timelinePlaybackActive) ||
+            (!state.is_playing && state.placements.length === 0)
+              ? "disabled"
+              : ""
+          }
+        >
+          ${state.is_playing && timelinePlaybackActive ? "Stop (Space)" : "Play timeline (Space)"}
+        </button>
+        <button class="timeline__export" type="button" data-export-midi>Export .mid</button>
+        <label class="pulse-toggle">
+          <input type="checkbox" data-loop-enabled${state.loop_enabled ? " checked" : ""} />
+          <span>Loop</span>
+        </label>
+        <div class="timeline__zoom" role="group" aria-label="Timeline zoom">
+          <button type="button" data-timeline-zoom="overview" aria-pressed="${timelineZoom === "overview"}">Overview</button>
+          <button type="button" data-timeline-zoom="normal" aria-pressed="${timelineZoom === "normal"}">Normal</button>
+          <button type="button" data-timeline-zoom="close" aria-pressed="${timelineZoom === "close"}">Close</button>
+        </div>
+      </div>
+      <div class="timeline__scroll" data-timeline-drop>
+        <div class="timeline__track">
+          ${timelineGrid(state)}
+          <div class="timeline__placements">${timelinePlacements(state)}</div>
+          ${timelinePlayhead(state)}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function canvasPane(state: ProjectState): string {
+  return /* html */ `
+    <section class="canvas" aria-label="Recording and arrangement">
+      ${timelinePane(state)}
+
+      <hr class="divider" />
+
+      <div class="canvas-head">
+        <div>
+          <h2>Current take</h2>
+          <span class="meta">${state.take ? `${state.take.notes.length} note${state.take.notes.length === 1 ? "" : "s"}` : "no take yet"}</span>
+        </div>
+        ${state.take ? /* html */ `
+          <div class="canvas-actions">
+            <button class="take-play" type="button" data-play-take ${state.is_playing ? "disabled" : ""}>Play take</button>
+            <select data-quantisation aria-label="Quantisation">
+              ${(["off", "whole", "half", "quarter", "eighth"] as Quantisation[]).map((value) => `<option value="${value}"${state.take?.quantisation === value ? " selected" : ""}>${value}</option>`).join("")}
+            </select>
+            <button type="button" data-apply-quantisation>Apply</button>
+            <button type="button" data-add-to-library>Add to library</button>
+          </div>
+        ` : ""}
+      </div>
+
+      ${state.take ? takeGrid(state) : `<span class="take-summary--empty">Press Record to capture a take</span>`}
+    </section>
+  `;
+}
+
+function inspectorPane(state: ProjectState): string {
+  return /* html */ `
+    <aside class="inspector${inspectorCollapsed ? " is-collapsed" : ""}" aria-label="Sound and input settings">
+      <div class="pane-header">
+        <button class="collapse-btn" type="button" data-toggle-inspector aria-label="${inspectorCollapsed ? "Expand inspector" : "Collapse inspector"}">${inspectorCollapsed ? "&lsaquo;" : "&rsaquo;"}</button>
+      </div>
+      <div class="inspector-rail">
+        <span class="inspector-rail__chip" title="Sound">S</span>
+        <span class="inspector-rail__chip" title="Pulse">P</span>
+        <span class="inspector-rail__chip" title="MIDI">M</span>
+      </div>
+
+      <div class="inspector-section" aria-label="Global sound controls">
+        <p class="pane-title">Sound</p>
+        <label class="sound-control">
+          <span class="sound-control__label">Instrument</span>
+          <select class="sound-control__select" data-instrument aria-label="Global instrument">
+            ${GM_CATEGORIES.map((category, index) => {
+              const nextStart = GM_CATEGORIES[index + 1]?.firstProgram ?? GM_INSTRUMENTS.length;
+              const options = GM_INSTRUMENTS.slice(category.firstProgram, nextStart)
+                .map((name, offset) => {
+                  const program = category.firstProgram + offset;
+                  return `<option value="${program}"${state.instrument === program ? " selected" : ""}>${name}</option>`;
+                })
+                .join("");
+              return `<optgroup label="${category.name}">${options}</optgroup>`;
+            }).join("")}
+          </select>
+        </label>
+        <label class="sound-control">
+          <span class="sound-control__label">Reverb <output data-reverb-value>${state.reverb}%</output></span>
+          <input
+            class="sound-control__range"
+            data-reverb
+            type="range"
+            min="${REVERB_MIN}"
+            max="${REVERB_MAX}"
+            value="${state.reverb}"
+            style="--pct: ${((state.reverb - REVERB_MIN) / (REVERB_MAX - REVERB_MIN)) * 100}%"
+            aria-label="Global reverb"
+          />
+        </label>
+      </div>
+
+      <hr class="divider" />
+
+      <div class="inspector-section" aria-label="Pulse controls">
+        <p class="pane-title">Pulse</p>
         <label class="sound-control">
           <span class="sound-control__label">Time signature</span>
           <span class="time-signature">
@@ -282,113 +474,60 @@ function render(root: HTMLElement, state: ProjectState): void {
           <span>One-bar count-in</span>
         </label>
       </div>
-      <div class="sound-controls" aria-label="Global sound controls">
-        <label class="sound-control">
-          <span class="sound-control__label">Instrument</span>
-          <select class="sound-control__select" data-instrument aria-label="Global instrument">
-            <option value="${PIANO}"${state.instrument === PIANO ? " selected" : ""}>Piano</option>
-            <option value="${ACCORDION}"${state.instrument === ACCORDION ? " selected" : ""}>Accordion</option>
-          </select>
-        </label>
-        <label class="sound-control sound-control--reverb">
-          <span class="sound-control__label">Reverb <output data-reverb-value>${state.reverb}%</output></span>
-          <input
-            class="sound-control__range"
-            data-reverb
-            type="range"
-            min="${REVERB_MIN}"
-            max="${REVERB_MAX}"
-            value="${state.reverb}"
-            aria-label="Global reverb"
-          />
-        </label>
-      </div>
-      <div class="recording-area" aria-label="Recording area">
-        <button
-          class="record-button${state.is_recording ? " record-button--active" : ""}"
-          type="button"
-          data-record
-          aria-pressed="${state.is_recording}"
-          ${state.is_playing ? "disabled" : ""}
-        >
-          ${state.is_recording ? "Stop (R)" : "Record (R)"}
-        </button>
-        ${
-          state.take
-            ? /* html */ `
-              <button class="take-play" type="button" data-play-take ${state.is_playing ? "disabled" : ""}>
-                Play take
-              </button>
-              <span class="take-summary">${state.take.notes.length} note${state.take.notes.length === 1 ? "" : "s"}</span>
-              <button type="button" data-add-to-library>Add to library</button>
-              ${takeGrid(state)}
-              <div class="take-edit-controls" aria-label="Take editing">
-                <label>Quantise <select data-quantisation aria-label="Quantisation">
-                  ${(["off", "whole", "half", "quarter", "eighth"] as Quantisation[]).map((value) => `<option value="${value}"${state.take?.quantisation === value ? " selected" : ""}>${value}</option>`).join("")}
-                </select></label>
-                <button type="button" data-apply-quantisation>Apply</button>
-              </div>
-            `
-            : /* html */ `<span class="take-summary take-summary--empty">no take yet</span>`
-        }
-      </div>
-      <aside class="library" aria-label="Library">
-        <h2>Library</h2>
-        ${state.blocks.map((block, index) => `<div class="library-block" style="--block-color: ${block.color}" draggable="true" data-drag-block="${block.id}">${
-          block.id === editingBlockId
-            ? `<input class="library-block__name-input" data-block-name-input="${block.id}" value="${escapeHtml(block.name)}" aria-label="Block name" />`
-            : `<span data-block-name="${block.id}">${escapeHtml(block.name)}</span>`
-        }<input data-block-color="${block.id}" type="color" value="${block.color}" /><button type="button" data-delete-block="${block.id}">Delete</button><button type="button" data-play-block="${index}"${state.is_playing ? " disabled" : ""}>Play</button></div>`).join("") || "<span class=\"take-summary take-summary--empty\">no blocks yet</span>"}
-      </aside>
-      <section class="timeline" aria-label="Timeline">
-        <div class="timeline__header">
-          <h2>Timeline</h2>
-          <button
-            class="timeline__play"
-            type="button"
-            data-play-timeline
-            ${
-              (state.is_playing && !timelinePlaybackActive) ||
-              (!state.is_playing && state.placements.length === 0)
-                ? "disabled"
-                : ""
-            }
-          >
-            ${state.is_playing && timelinePlaybackActive ? "Stop (Space)" : "Play timeline (Space)"}
-          </button>
-          <button class="timeline__export" type="button" data-export-midi>Export .mid</button>
-          <label class="pulse-toggle">
-            <input type="checkbox" data-loop-enabled${state.loop_enabled ? " checked" : ""} />
-            <span>Loop</span>
-          </label>
-          <div class="timeline__zoom" role="group" aria-label="Timeline zoom">
-            <button type="button" data-timeline-zoom="overview" aria-pressed="${timelineZoom === "overview"}">Overview</button>
-            <button type="button" data-timeline-zoom="normal" aria-pressed="${timelineZoom === "normal"}">Normal</button>
-            <button type="button" data-timeline-zoom="close" aria-pressed="${timelineZoom === "close"}">Close</button>
-          </div>
-        </div>
-        <div class="timeline__scroll" data-timeline-drop>
-          <div class="timeline__track">
-            ${timelineGrid(state)}
-            <div class="timeline__placements">${timelinePlacements(state)}</div>
-            ${timelinePlayhead(state)}
-          </div>
-        </div>
-      </section>
-      <div class="midi-control" aria-label="MIDI input">
+
+      <hr class="divider" />
+
+      <div class="inspector-section" aria-label="MIDI input">
+        <p class="pane-title">MIDI</p>
         <label class="sound-control">
           <span class="sound-control__label">MIDI input</span>
-          <select class="sound-control__select" data-midi-input aria-label="MIDI input" disabled>
-            <option>Checking MIDI inputs…</option>
-          </select>
+          ${midiSelectMarkup()}
         </label>
-        <p class="midi-control__status" data-midi-status aria-live="polite">Checking MIDI inputs…</p>
+        <p class="midi-control__status" data-midi-status aria-live="polite">${midiStatus ? escapeHtml(midiStatus.message) : "Checking MIDI inputs…"}</p>
+        <button class="test-note" type="button" data-play-test-note>Play test note</button>
       </div>
-      <button class="test-note" type="button" data-play-test-note>
-        Play test note
-      </button>
-      <p class="placeholder__status" data-audio-status>no project &mdash; nothing to play yet</p>
-    </section>
+    </aside>
+  `;
+}
+
+function midiSelectMarkup(): string {
+  if (!midiStatus) {
+    return `<select class="sound-control__select" data-midi-input aria-label="MIDI input" disabled><option>Checking MIDI inputs…</option></select>`;
+  }
+  if (midiStatus.devices.length === 0) {
+    return `<select class="sound-control__select" data-midi-input aria-label="MIDI input" disabled><option selected>No MIDI input available</option></select>`;
+  }
+  const status = midiStatus;
+  return `<select class="sound-control__select" data-midi-input aria-label="MIDI input">
+    ${!status.selectedDeviceId ? `<option value="" disabled selected>Choose a MIDI input…</option>` : ""}
+    ${status.devices.map((device) => `<option value="${device.id}"${device.id === status.selectedDeviceId ? " selected" : ""}>${escapeHtml(device.name)}</option>`).join("")}
+  </select>`;
+}
+
+function statusBar(state: ProjectState): string {
+  return /* html */ `
+    <footer class="statusbar">
+      <span data-audio-status>no project &mdash; nothing to play yet</span>
+      <span>${state.is_dirty ? "unsaved changes" : "all changes saved"}</span>
+    </footer>
+  `;
+}
+
+function render(root: HTMLElement, state: ProjectState): void {
+  currentState = state;
+  root.innerHTML = /* html */ `
+    <div class="app-shell">
+      ${topbar(state)}
+      <div
+        class="body-grid"
+        style="grid-template-columns: ${libraryCollapsed ? "var(--rail-w)" : "var(--library-w)"} 1fr ${inspectorCollapsed ? "var(--rail-w)" : "var(--inspector-w)"}"
+      >
+        ${libraryPane(state)}
+        ${canvasPane(state)}
+        ${inspectorPane(state)}
+      </div>
+      ${statusBar(state)}
+    </div>
     ${pendingProjectAction ? /* html */ `
       <div class="modal-overlay" data-unsaved-changes-overlay>
         <div class="modal" role="alertdialog" aria-modal="true" aria-label="Unsaved changes">
@@ -472,6 +611,10 @@ async function setReverb(root: HTMLElement, reverb: number): Promise<void> {
   const output = root.querySelector<HTMLOutputElement>("[data-reverb-value]");
   if (output) {
     output.textContent = `${value}%`;
+  }
+  const range = root.querySelector<HTMLInputElement>("[data-reverb]");
+  if (range) {
+    range.style.setProperty("--pct", `${((value - REVERB_MIN) / (REVERB_MAX - REVERB_MIN)) * 100}%`);
   }
   await applyCommand({ type: "setReverb", payload: value });
 }
@@ -653,6 +796,7 @@ async function saveCurrentProject(root: HTMLElement, name?: string): Promise<voi
   if (!currentState?.is_dirty) return;
   if (!activeProjectName && !name) {
     isNamingProject = true;
+    projectMenuOpen = true;
     render(root, await fetchProjectState());
     root.querySelector<HTMLInputElement>("[data-project-name]")?.focus();
     return;
@@ -755,8 +899,15 @@ async function settleRecovery(root: HTMLElement, accept: boolean): Promise<void>
 function wireProjectControls(root: HTMLElement): void {
   root.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
+    if (target.closest("[data-project-menu-toggle]")) {
+      projectMenuOpen = !projectMenuOpen;
+      if (currentState) render(root, currentState);
+    }
     if (target.closest("[data-save-project]")) void saveCurrentProject(root);
-    if (target.closest("[data-new-project]")) void requestProjectAction(root, { kind: "new" });
+    if (target.closest("[data-new-project]")) {
+      projectMenuOpen = false;
+      void requestProjectAction(root, { kind: "new" });
+    }
     if (target.closest("[data-cancel-project-name]")) {
       isNamingProject = false;
       pendingActionAfterNaming = null;
@@ -764,6 +915,7 @@ function wireProjectControls(root: HTMLElement): void {
     }
     const open = target.closest<HTMLButtonElement>("[data-open-project]");
     if (open?.dataset.openProject) {
+      projectMenuOpen = false;
       void requestProjectAction(root, { kind: "open", name: open.dataset.openProject });
     }
 
@@ -1106,6 +1258,46 @@ function wireTempoControls(root: HTMLElement): void {
     if (!input.matches(".tempo__input")) return;
     void setBpm(root, Number((input as HTMLInputElement).value));
   });
+
+  // Drag-to-adjust: up increases BPM, down decreases. A plain click (no
+  // movement past the threshold) is left alone so it still focuses the
+  // input for typing — only an armed drag calls preventDefault/setBpm.
+  const PX_PER_BPM = 4;
+  const DRAG_THRESHOLD_PX = 4;
+  let dragState: { pointerId: number; startY: number; startBpm: number; armed: boolean } | null = null;
+
+  root.addEventListener("pointerdown", (event) => {
+    const readout = (event.target as HTMLElement).closest<HTMLElement>(".tempo__readout");
+    const input = root.querySelector<HTMLInputElement>(".tempo__input");
+    if (!readout || !input) return;
+    dragState = { pointerId: event.pointerId, startY: event.clientY, startBpm: Number(input.value), armed: false };
+  });
+
+  root.addEventListener("pointermove", (event) => {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    const readout = root.querySelector<HTMLElement>(".tempo__readout");
+    const input = root.querySelector<HTMLInputElement>(".tempo__input");
+    if (!readout || !input) return;
+    const deltaY = dragState.startY - event.clientY;
+    if (!dragState.armed) {
+      if (Math.abs(deltaY) < DRAG_THRESHOLD_PX) return;
+      dragState.armed = true;
+      readout.setPointerCapture(dragState.pointerId);
+    }
+    event.preventDefault();
+    input.value = String(clampBpm(dragState.startBpm + Math.round(deltaY / PX_PER_BPM)));
+  });
+
+  const endTempoDrag = (event: PointerEvent) => {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    const wasArmed = dragState.armed;
+    dragState = null;
+    if (!wasArmed) return;
+    const input = root.querySelector<HTMLInputElement>(".tempo__input");
+    if (input) void setBpm(root, Number(input.value));
+  };
+  root.addEventListener("pointerup", endTempoDrag);
+  root.addEventListener("pointercancel", endTempoDrag);
 }
 
 function wireSoundControls(root: HTMLElement): void {
@@ -1137,10 +1329,11 @@ function wireSoundControls(root: HTMLElement): void {
   });
 }
 
-function showAudioStatus(root: HTMLElement, message: string): void {
+function showAudioStatus(root: HTMLElement, message: string, isError = false): void {
   const status = root.querySelector<HTMLElement>("[data-audio-status]");
   if (status) {
     status.textContent = message;
+    status.classList.toggle("is-error", isError);
   }
 }
 
@@ -1153,35 +1346,25 @@ function wireTestNoteButton(root: HTMLElement): void {
 
     playTestNote()
       .then(() => showAudioStatus(root, "played a test note"))
-      .catch((error: unknown) => showAudioStatus(root, `could not play a test note: ${String(error)}`));
+      .catch((error: unknown) => showAudioStatus(root, `could not play a test note: ${String(error)}`, true));
   });
 }
 
+// Rather than patching the MIDI `<select>` in the DOM out-of-band, this
+// writes into the same `midiStatus` the normal `render()` reads (see
+// `midiSelectMarkup`). Patching out-of-band used to get clobbered by the
+// very next unrelated `render()` call — nearly every command handler
+// triggers one — leaving the dropdown stuck on "Checking MIDI inputs…"
+// until the next 1s poll tick repaired it.
 function renderMidiStatus(root: HTMLElement, status: MidiStatus): void {
-  const select = root.querySelector<HTMLSelectElement>("[data-midi-input]");
-  const message = root.querySelector<HTMLElement>("[data-midi-status]");
-  if (message) message.textContent = status.message;
-  if (!select) return;
-
-  select.replaceChildren();
-  if (status.devices.length === 0) {
-    const option = new Option("No MIDI input available", "");
-    option.selected = true;
-    select.add(option);
-    select.disabled = true;
-    return;
-  }
-  if (!status.selectedDeviceId) {
-    const option = new Option("Choose a MIDI input…", "");
-    option.disabled = true;
-    option.selected = true;
-    select.add(option);
-  }
-  for (const device of status.devices) {
-    const option = new Option(device.name, device.id, false, device.id === status.selectedDeviceId);
-    select.add(option);
-  }
-  select.disabled = false;
+  const unchanged = midiStatus !== null
+    && midiStatus.message === status.message
+    && midiStatus.selectedDeviceId === status.selectedDeviceId
+    && midiStatus.devices.length === status.devices.length
+    && midiStatus.devices.every((device, index) => device.id === status.devices[index]?.id && device.name === status.devices[index]?.name);
+  midiStatus = status;
+  if (unchanged) return;
+  if (currentState) render(root, currentState);
 }
 
 async function refreshMidiDevices(root: HTMLElement): Promise<void> {
@@ -1341,11 +1524,27 @@ function wireRecordingControls(root: HTMLElement): void {
   });
 }
 
+function wireLayoutControls(root: HTMLElement): void {
+  root.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("[data-toggle-library]")) {
+      libraryCollapsed = !libraryCollapsed;
+      if (currentState) render(root, currentState);
+    }
+    if (target.closest("[data-toggle-inspector]")) {
+      inspectorCollapsed = !inspectorCollapsed;
+      if (currentState) render(root, currentState);
+    }
+  });
+}
+
 async function main(): Promise<void> {
   const root = document.querySelector<HTMLElement>("#app");
   if (!root) {
     throw new Error("Missing #app mount point in index.html");
   }
+
+  renderSplash(root);
 
   const state = await fetchProjectState();
   render(root, state);
@@ -1362,8 +1561,15 @@ async function main(): Promise<void> {
   wireTimelineControls(root);
   wireBlockPlacementDragAndDrop(root);
   wireTimelineSelection(root);
+  wireLayoutControls(root);
   await refreshMidiDevices(root);
   window.setInterval(() => void refreshMidiDevices(root), 1_000);
+
+  fetchAudioStatus()
+    .then((status) => {
+      if (!status.available) showAudioStatus(root, status.message, true);
+    })
+    .catch((error: unknown) => showAudioStatus(root, `could not check audio output: ${String(error)}`, true));
 }
 
 void main();

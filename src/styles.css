@@ -21,7 +21,7 @@
   --text-md: 1.375rem; /* 22px — section headings */
   --text-lg: 1.75rem; /* 28px — primary readouts */
   --text-xl: 2.5rem; /* 40px — the one thing on screen that matters */
-  --text-display: 4rem; /* 64px — the app mark */
+  --text-display: 4rem; /* 64px — the splash mark, nowhere else */
 
   --font-ui: ui-sans-serif, -apple-system, "SF Pro Text", "Helvetica Neue",
     system-ui, sans-serif;
@@ -37,15 +37,25 @@
   /* Dark surfaces, near-black rather than grey so coloured blocks carry. */
   --surface-base: #0d0f12;
   --surface-raised: #16191e;
+  --surface-panel: #1a1e24;
   --line: #262b33;
+  --line-soft: #1e232b;
 
   --ink: #e8eaed;
   --ink-dim: #9aa3ae;
   --ink-faint: #5c6570;
 
   --accent: #6ee7b7;
+  --rec: #f87171;
 
   --radius: 6px;
+
+  /* Sidebar widths, collapsed vs. expanded — read by main.ts to size the
+     body grid inline, since the whole shell is re-rendered from scratch on
+     every state change rather than toggled in place. */
+  --library-w: 260px;
+  --inspector-w: 300px;
+  --rail-w: 64px;
 }
 
 *,
@@ -67,37 +77,35 @@ body {
   font-size: var(--text-sm);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  /* The window chrome is the only thing a musician should be able to drag. */
+  /* The topbar is the only thing a musician should be able to drag. */
   user-select: none;
   cursor: default;
   overflow: hidden;
 }
 
 #app {
-  display: grid;
-  place-items: center;
   height: 100%;
-  padding: var(--space-5);
 }
 
-/* --- Placeholder shell (issue #2). Replaced by the three real regions:
-       recording area, library sidebar, timeline. ------------------------- */
+/* --- Splash: the mark, name and tagline live here only, at boot. ------- */
 
-.placeholder {
+.splash {
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: var(--space-3);
   text-align: center;
 }
 
-.placeholder__mark {
+.splash__mark {
   width: 112px;
   height: 112px;
   color: var(--accent);
 }
 
-.placeholder__name {
+.splash__name {
   margin: 0;
   font-size: var(--text-display);
   font-weight: 600;
@@ -105,7 +113,7 @@ body {
   line-height: 1;
 }
 
-.placeholder__tagline {
+.splash__tagline {
   margin: 0;
   max-width: 42ch;
   font-size: var(--text-md);
@@ -114,16 +122,133 @@ body {
   text-wrap: balance;
 }
 
+/* --- App shell: topbar, sidebar/canvas/inspector grid, status bar. ----- */
+
+.app-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  flex: none;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2) 0 84px; /* clears macOS's overlaid traffic lights */
+  background: var(--surface-panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar-spacer {
+  flex: 1;
+}
+
+.project-menu-wrap {
+  position: relative;
+  flex: none;
+}
+
+.project-menu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-xs);
+  max-width: 16rem;
+}
+
+.project-menu__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-menu__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  flex: none;
+}
+
+.project-menu__dot.is-dirty {
+  background: var(--accent);
+}
+
+.project-menu__caret {
+  color: var(--ink-faint);
+}
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+.body-grid {
+  flex: 1;
+  display: grid;
+  min-height: 0;
+}
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: var(--space-1);
+}
+
+.pane-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.collapse-btn {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+
+.collapse-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+
 /* --- Projects (issue #13): app-owned names, never a native file picker. -- */
 
 .project-controls {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 5;
   display: grid;
   gap: var(--space-1);
-  width: min(100%, 34rem);
+  width: max(20rem, 100%);
   padding: var(--space-2);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-raised);
+  box-shadow: 0 20px 40px -20px rgba(0, 0, 0, 0.6);
   text-align: left;
 }
 
@@ -161,12 +286,12 @@ body {
 .tempo {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
 .tempo__step {
-  width: 2.5rem;
-  height: 2.5rem;
+  width: 2.25rem;
+  height: 2.25rem;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-raised);
@@ -185,10 +310,12 @@ body {
   display: flex;
   align-items: baseline;
   gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
+  padding: 0 var(--space-2);
+  height: 2.25rem;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-raised);
+  cursor: ns-resize;
 }
 
 .tempo__input {
@@ -197,7 +324,7 @@ body {
   background: transparent;
   color: var(--ink);
   font-family: var(--font-numeric);
-  font-size: var(--text-lg);
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
   text-align: right;
   cursor: text;
@@ -215,123 +342,29 @@ body {
 
 .tempo__unit {
   color: var(--ink-dim);
-  font-size: var(--text-xs);
+  font-size: 12px;
   text-transform: lowercase;
-}
-
-/* --- Pulse controls (issue #7): audible time without a timeline. ------- */
-
-.pulse-controls {
-  display: flex;
-  align-items: end;
-  justify-content: center;
-  gap: var(--space-3);
-}
-
-.time-signature {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-family: var(--font-numeric);
-}
-
-.time-signature .sound-control__select {
-  min-width: 0;
-  width: 4rem;
-}
-
-.pulse-toggle {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--ink-dim);
-  font-size: var(--text-xs);
-  text-transform: lowercase;
-}
-
-.pulse-toggle input {
-  width: 1.125rem;
-  height: 1.125rem;
-  accent-color: var(--accent);
-}
-
-/* --- Global sound controls (issue #5). ---------------------------------- */
-
-.sound-controls {
-  display: flex;
-  align-items: end;
-  justify-content: center;
-  gap: var(--space-3);
-}
-
-.sound-control {
-  display: grid;
-  gap: var(--space-1);
-  text-align: left;
-}
-
-.sound-control__label {
-  color: var(--ink-dim);
-  font-size: var(--text-xs);
-  text-transform: lowercase;
-}
-
-.sound-control__label output {
-  color: var(--ink);
-  font-family: var(--font-numeric);
-  font-variant-numeric: tabular-nums;
-}
-
-.sound-control__select {
-  min-width: 10rem;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-raised);
-  color: var(--ink);
-  font: inherit;
-  cursor: default;
-}
-
-.sound-control__select:focus-visible,
-.sound-control__range:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: 3px;
-}
-
-.sound-control__range {
-  width: 10rem;
-  accent-color: var(--accent);
-  cursor: default;
-}
-
-/* --- Recording area (issue #8): one take, captured and played back. ---- */
-
-.recording-area {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
 }
 
 .record-button {
-  padding: var(--space-1) var(--space-3);
+  height: 2.25rem;
+  padding: 0 var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-raised);
   color: var(--ink);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   cursor: default;
 }
 
 .record-button:hover:not(:disabled) {
-  border-color: #f87171;
-  color: #f87171;
+  border-color: var(--rec);
+  color: var(--rec);
 }
 
 .record-button--active {
-  border-color: #f87171;
-  background: #f87171;
+  border-color: var(--rec);
+  background: var(--rec);
   color: var(--surface-base);
 }
 
@@ -340,13 +373,269 @@ body {
   cursor: not-allowed;
 }
 
+/* --- Library sidebar (issue #9 → collapsible, H1-ish). ------------------ */
+
+.library {
+  background: var(--surface-panel);
+  border-right: 1px solid var(--line);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.library.is-collapsed {
+  padding-left: var(--space-1);
+  padding-right: var(--space-1);
+  align-items: center;
+}
+
+.library.is-collapsed .pane-header {
+  justify-content: center;
+}
+
+.library.is-collapsed .pane-title {
+  display: none;
+}
+
+.library-block {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface-raised);
+  flex-wrap: wrap;
+}
+
+.library.is-collapsed .library-block {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--block-color);
+}
+
+.library.is-collapsed .library-block > *:not(.library-block__swatch) {
+  display: none;
+}
+
+.library-block__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--block-color);
+  flex: none;
+}
+
+.library.is-collapsed .library-block__swatch {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.library-block__name {
+  flex: 1;
+  min-width: 6rem;
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-block__name-input {
+  flex: 1;
+  min-width: 6rem;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--ink);
+  background: var(--surface-base);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 0 var(--space-1);
+}
+
+.library-block button,
+.library-block input[type="color"] {
+  font: inherit;
+  font-size: 12px;
+}
+
+.library-block button {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-base);
+  color: var(--ink-dim);
+}
+
+.library-block button:hover {
+  color: var(--ink);
+}
+
+.library-block input[type="color"] {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: none;
+}
+
+.library-block label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink-dim);
+  width: 100%;
+}
+
+.library-block label input {
+  flex: 1;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-base);
+  color: var(--ink);
+}
+
+.library-empty {
+  color: var(--ink-faint);
+  font-size: var(--text-xs);
+}
+
+/* --- Canvas: timeline preview above the take editor. -------------------- */
+
+.canvas {
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.divider {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 0;
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.timeline__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.timeline__note {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.timeline__track {
+  display: flex;
+  gap: 3px;
+  height: 44px;
+  padding: var(--space-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-base);
+}
+
+.timeline__clip {
+  flex: 1;
+  border-radius: 4px;
+  background: var(--block-color);
+  opacity: 0.85;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--surface-base);
+  font-weight: 600;
+  overflow: hidden;
+  padding: 0 4px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.timeline__empty {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  color: var(--ink-faint);
+  font-size: var(--text-xs);
+}
+
+.canvas-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: auto;
+}
+
+.canvas-head h2 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.canvas-head .meta {
+  font-family: var(--font-numeric);
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+
+.canvas-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.canvas-actions select,
+.canvas-actions button {
+  font: inherit;
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--ink-dim);
+}
+
+.canvas-actions button:hover {
+  color: var(--ink);
+}
+
+.canvas-actions button[data-add-to-library] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .take-play {
   padding: var(--space-1) var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-raised);
   color: var(--ink);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   cursor: default;
 }
 
@@ -360,17 +649,12 @@ body {
   cursor: not-allowed;
 }
 
-.take-summary {
-  color: var(--ink-dim);
+.take-summary--empty {
+  color: var(--ink-faint);
   font-size: var(--text-xs);
 }
 
-.take-summary--empty {
-  color: var(--ink-faint);
-}
-
 .take-editor {
-  width: min(28rem, 100%);
   overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -379,7 +663,9 @@ body {
 
 .take-editor svg {
   display: block;
+  width: auto;
   min-width: 100%;
+  height: 88px;
 }
 
 .take-trim-handles {
@@ -392,7 +678,14 @@ body {
 
 .take-trim-handle {
   width: 100%;
+  --pct: 0%;
   accent-color: var(--accent);
+}
+
+.take-trim-handle::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) var(--pct), var(--line) var(--pct));
 }
 
 .take-grid line {
@@ -404,35 +697,104 @@ body {
   fill: var(--accent);
 }
 
-.take-edit-controls {
+/* --- Inspector: sound, pulse and MIDI settings. ------------------------- */
+
+.inspector {
+  background: var(--surface-panel);
+  border-left: 1px solid var(--line);
+  padding: var(--space-2);
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: var(--space-2);
-  color: var(--ink-dim);
-  font-size: var(--text-xs);
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow-y: auto;
+  min-width: 0;
 }
 
-.take-edit-controls label {
+.inspector .pane-header {
+  justify-content: flex-end;
+}
+
+.inspector.is-collapsed {
+  padding-left: var(--space-1);
+  padding-right: var(--space-1);
+  align-items: center;
+}
+
+.inspector.is-collapsed .pane-header {
+  justify-content: center;
+}
+
+.inspector.is-collapsed .inspector-section,
+.inspector.is-collapsed .divider {
+  display: none;
+}
+
+.inspector-rail {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.inspector.is-collapsed .inspector-rail {
+  display: flex;
+}
+
+.inspector-rail__chip {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+  color: var(--ink-faint);
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.inspector-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sound-control {
   display: grid;
   gap: var(--space-1);
+  text-align: left;
 }
 
-.take-edit-controls button,
-.take-edit-controls select {
-  font: inherit;
+.sound-control__label {
+  color: var(--ink-dim);
+  font-size: 13px;
 }
 
-.library { display: grid; gap: var(--space-1); }
-.library h2 { margin: 0; font-size: var(--text-sm); color: var(--ink-dim); }
-.library-block { border-left: 4px solid var(--block-color); padding: var(--space-1) var(--space-2); background: var(--surface-raised); }
-.library-block__name-input {
-  font: inherit;
+.sound-control__label output {
   color: var(--ink);
-  background: var(--surface-base);
-  border: 1px solid var(--accent);
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+}
+
+.sound-control__select {
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  padding-right: calc(var(--space-2) + 14px);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 0 var(--space-1);
+  background: var(--surface-raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: default;
+  /* macOS's native NSPopUpButton renders a stacked up/down spinner, which
+     reads as a number-stepper affordance on a fixed list of options — drop
+     it for a single custom chevron instead. */
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238b93a1' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--space-2) center;
+  background-size: 10px 6px;
 }
 
 /* --- The timeline (issue #16): a single track with a pulse grid, bar
@@ -619,29 +981,69 @@ body {
   color: var(--accent);
 }
 
-/* --- Native MIDI input picker (issue #6). ------------------------------ */
+.sound-control__select:focus-visible,
+.sound-control__range:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.sound-control__range {
+  width: 100%;
+  --pct: 0%;
+  accent-color: var(--accent);
+  cursor: default;
+}
+
+.sound-control__range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) var(--pct), var(--line) var(--pct));
+}
+
+.time-signature {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-numeric);
+}
+
+.time-signature .sound-control__select {
+  width: 4.5rem;
+}
+
+.pulse-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--ink-dim);
+  font-size: 13px;
+}
+
+.pulse-toggle input {
+  width: 1.125rem;
+  height: 1.125rem;
+  accent-color: var(--accent);
+}
 
 .midi-control {
-  display: grid;
-  justify-items: center;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-1);
 }
 
 .midi-control__status {
   margin: 0;
   color: var(--ink-faint);
-  font-size: var(--text-xs);
+  font-size: 13px;
 }
 
-/* --- Test note button (issue #4): proves audio reaches the speakers. ---- */
-
 .test-note {
-  padding: var(--space-1) var(--space-3);
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-raised);
-  color: var(--ink);
-  font-size: var(--text-sm);
+  color: var(--ink-dim);
+  font-size: var(--text-xs);
   cursor: default;
 }
 
@@ -650,15 +1052,48 @@ body {
   color: var(--accent);
 }
 
-.placeholder__status {
-  margin-top: var(--space-2);
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-raised);
+/* --- Status bar. --------------------------------------------------------- */
+
+.statusbar {
+  flex: none;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border-top: 1px solid var(--line);
+  background: var(--surface-panel);
   font-family: var(--font-numeric);
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
+  font-size: 12px;
   color: var(--ink-faint);
   text-transform: lowercase;
+}
+
+.statusbar span.is-error {
+  color: var(--rec);
+  font-weight: 600;
+}
+
+.statusbar span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .library,
+  .inspector {
+    position: fixed;
+    top: 60px;
+    bottom: 30px;
+    z-index: 4;
+    box-shadow: 0 20px 40px -20px rgba(0, 0, 0, 0.6);
+  }
+  .library {
+    left: 0;
+  }
+  .inspector {
+    right: 0;
+  }
 }

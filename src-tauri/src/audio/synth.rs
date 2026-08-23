@@ -27,11 +27,6 @@ use rustysynth::{SoundFont, SoundFontError, Synthesizer, SynthesizerError, Synth
 /// NOTICE for the fixed upstream version, licence, and compatibility caveat.
 const SOUND_FONT_BYTES: &[u8] = include_bytes!("../../assets/soundfonts/GeneralUser-GS.sf2");
 
-/// The two instruments exposed by the initial global selector. These remain
-/// opaque at the `Synth` port; adding another one is a mapping/data change
-/// here, not a trait or engine redesign. GM program numbers are zero-based.
-const PIANO_PROGRAM: i32 = 0;
-const ACCORDION_PROGRAM: i32 = 21;
 const GM_CHANNEL: i32 = 0;
 const MIDI_REVERB_CONTROLLER: i32 = 0x5B;
 
@@ -62,12 +57,9 @@ impl std::error::Error for RustySynthError {}
 /// A General MIDI synthesiser, adapting `rustysynth::Synthesizer` to the
 /// `daw_core::ports::Synth` port.
 ///
-/// Instruments are identified by an opaque [`InstrumentId`] at the port
-/// boundary; today every id is routed to MIDI channel 0, which plays the
-/// bundled SoundFont's default preset (a piano) since the instrument
-/// dropdown (issue #5) does not exist yet. Extending this to route different
-/// ids to different programs/channels is a change to this one mapping, not a
-/// change to the `Synth` trait.
+/// [`InstrumentId`] is the GM program number (0-127); every note plays on
+/// MIDI channel 0 with a program change selecting the instrument, per the
+/// General MIDI bank 0 layout the bundled SoundFont follows.
 pub struct RustySynth {
     inner: Synthesizer,
 }
@@ -100,15 +92,9 @@ impl Synth for RustySynth {
         // There is no timeline yet to make `pulse` meaningful; it is
         // received and ignored here so the port's shape doesn't have to
         // change once one exists.
-        self.inner.process_midi_message(
-            GM_CHANNEL,
-            0xC0,
-            match instrument {
-                1 => ACCORDION_PROGRAM,
-                _ => PIANO_PROGRAM,
-            },
-            0,
-        );
+        let program = (instrument as i32).clamp(0, 127);
+        self.inner
+            .process_midi_message(GM_CHANNEL, 0xC0, program, 0);
         self.inner
             .note_on(GM_CHANNEL, pitch as i32, velocity as i32);
     }
